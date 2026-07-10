@@ -18,8 +18,8 @@ const INITIAL_TEAM = [
   { id: 8,  name: "Madhu",                 tech: "IDMC",               role: "Lead - IDMC",        location: "Offshore", city: "Chennai",   isLead: true,                    phone: "+91 98765 10008", pin: "1010" },
   { id: 9,  name: "Sathish",               tech: "IDMC",               role: "Data Engineer",      location: "Offshore", city: "Chennai",                                    phone: "+91 98765 10009", pin: "1234" },
   { id: 10, name: "Sriram",                tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Chennai",                                    phone: "+91 98765 10010", pin: "1234" },
-  { id: 11, name: "Shivani",               tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Hyderabad",                                  phone: "+91 98765 10011", pin: "1234" },
-  { id: 12, name: "Gokul",                 tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Chennai",                                    phone: "+91 98765 10012", pin: "1234" },
+  { id: 11, name: "Shivani",               tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Hyderabad", swapShift: true,                    phone: "+91 98765 10011", pin: "1234" },
+  { id: 12, name: "Gokul",                 tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Chennai",   swapShift: true,                    phone: "+91 98765 10012", pin: "1234" },
   { id: 13, name: "Devansh",               tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Pune",                                       phone: "+91 98765 10013", pin: "1234" },
   { id: 14, name: "Dhanalakshmi",          tech: "IDMC",               role: "Data Engineer",      location: "Offshore", city: "Chennai",                                    phone: "+91 98765 10014", pin: "1234" },
   { id: 15, name: "Supraja",               tech: "IDMC",               role: "Data Engineer",      location: "Offshore", city: "Bangalore",                                  phone: "+91 98765 10015", pin: "1234" },
@@ -37,8 +37,8 @@ const INITIAL_TEAM = [
   { id: 27, name: "Yalamanchili Meghana",  tech: "IDMC",               role: "Data Engineer",      location: "Offshore", city: "Hyderabad",                                  phone: "+91 98765 10027", pin: "1234" },
   { id: 28, name: "Sivaranjani Thangaraj", tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Chennai",                                    phone: "+91 98765 10028", pin: "1234" },
   { id: 29, name: "M. Swathi Sree",        tech: "Oracle",             role: "Data Engineer",      location: "Offshore", city: "Chennai",                                    phone: "+91 98765 10029", pin: "1234" },
-  { id: 30, name: "Kiruthika Shree B",     tech: "Oracle",             role: "Data Engineer",      location: "Offshore", city: "Chennai",                                    phone: "+91 98765 10030", pin: "1234" },
-  { id: 31, name: "Aishwarya H",           tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Bangalore",                                  phone: "+91 98765 10031", pin: "1234" },
+  { id: 30, name: "Kiruthika Shree B",     tech: "Oracle",             role: "Data Engineer",      location: "Offshore", city: "Chennai",   swapShift: true,                    phone: "+91 98765 10030", pin: "1234" },
+  { id: 31, name: "Aishwarya H",           tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Bangalore", swapShift: true,                    phone: "+91 98765 10031", pin: "1234" },
   { id: 32, name: "Aahad Syed",            tech: "Oracle",             role: "Data Engineer",      location: "Offshore", city: "Hyderabad",                                  phone: "+91 98765 10032", pin: "1234" },
 ];
 
@@ -334,11 +334,41 @@ function generateRoster(year, month, conditions, members) {
     });
   });
 
+  // ── Paired shift assignment ─────────────────────────────────────────────
+  // These pairs must ALWAYS land on the same weekday S1/S2 shift as each
+  // other, every month, no exceptions. The first id in each pair is the
+  // "anchor" — its own id-parity + swapShift flag determines the pair's
+  // shift as before. The second id (the "follower") is forced to match the
+  // anchor's shift exactly, overriding whatever its own id parity/swapShift
+  // would otherwise produce. This is more robust than tuning swapShift
+  // flags to coincidentally line up (which is fragile — see the Aishwarya/
+  // Kiruthika Shree case, which needed exactly one of the two flagged).
+  const SHIFT_PAIRS = [
+    [9, 12],   // Sathish            <-> Gokul (Data Engineer)
+    [11, 26],  // Shivani            <-> Mallela Rajyalakshmi
+    [30, 31],  // Kiruthika Shree B  <-> Aishwarya H
+  ];
+  const followerAnchor = {}; // followerId -> anchorId
+  SHIFT_PAIRS.forEach(([anchorId, followerId]) => { followerAnchor[followerId] = anchorId; });
+
+  function computeBaseIsS1(member) {
+    // even ID = starts S1, odd = starts S2; swapShift flag inverts this for a specific member
+    return member.swapShift ? (member.id % 2 !== 0) : (member.id % 2 === 0);
+  }
+  const baseIsS1ById = {};
+  members.forEach(m => { baseIsS1ById[m.id] = computeBaseIsS1(m); });
+  // Force each follower to match its anchor's shift, regardless of the follower's own parity
+  Object.entries(followerAnchor).forEach(([followerId, anchorId]) => {
+    if (baseIsS1ById[anchorId] !== undefined) baseIsS1ById[+followerId] = baseIsS1ById[anchorId];
+  });
+
   const roster = {};
 
   members.forEach(member => {
     roster[member.id] = {};
-    const baseIsS1 = member.id % 2 === 0;
+    // baseIsS1 drives weekday S1/S2 rotation — looked up from baseIsS1ById so
+    // paired members (see SHIFT_PAIRS above) always come out identical.
+    const baseIsS1 = baseIsS1ById[member.id];
 
     // ── Onsite: Mon–Fri G-PST, Sat+Sun OFF ─────────────────────────────
     if (member.location === "Onsite") {
@@ -486,13 +516,21 @@ function calcStats(roster, days, members) {
   return stats;
 }
 
+// Shared helper: a filter value is "active" when it's a non-empty array (multi-select)
+function isFilterActive(v) {
+  return Array.isArray(v) ? v.length > 0 : v !== "All";
+}
+
 // Clean dropdown — renders in a portal-style fixed position to avoid table clipping
+// Multi-select: `value` is an array of selected options (empty array = "All", no filter).
 function FilterSelect({ label, options, value, onChange, colorMap }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef(null);
   const menuRef = useRef(null);
   const [pos, setPos] = useState({ top: 0, left: 0 });
-  const active = value !== "All";
+  const selected = Array.isArray(value) ? value : []; // tolerate legacy "All" string values
+  const active = selected.length > 0;
+  const realOptions = options.filter(o => o !== "All");
 
   useEffect(() => {
     function handle(e) {
@@ -510,6 +548,16 @@ function FilterSelect({ label, options, value, onChange, colorMap }) {
     setOpen(o => !o);
   }
 
+  function toggleOption(opt) {
+    if (opt === "All") { onChange([]); return; } // "All" clears this filter
+    const next = selected.includes(opt) ? selected.filter(v => v !== opt) : [...selected, opt];
+    onChange(next);
+  }
+
+  const buttonLabel = !active ? label
+    : selected.length === 1 ? selected[0]
+    : `${selected.length} selected`;
+
   return (
     <>
       <button ref={btnRef} onClick={openMenu}
@@ -521,7 +569,7 @@ function FilterSelect({ label, options, value, onChange, colorMap }) {
           border: active ? "1px solid #1d4ed8" : "1px solid #d1d5db",
           fontWeight: active ? 600 : 400, whiteSpace: "nowrap",
         }}>
-        {active ? value : label}
+        {buttonLabel}
         <svg width="10" height="6" viewBox="0 0 10 6" fill="none" style={{ flexShrink: 0 }}>
           <path d="M1 1l4 4 4-4" stroke={active ? "white" : "#6b7280"} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -533,10 +581,21 @@ function FilterSelect({ label, options, value, onChange, colorMap }) {
           borderRadius: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
           minWidth: "180px", maxHeight: "280px", overflowY: "auto",
         }}>
-          {options.map(opt => {
-            const isSel = value === opt;
+          <div onClick={() => toggleOption("All")}
+            style={{
+              padding: "8px 14px", fontSize: "12px", cursor: "pointer",
+              background: !active ? "#eff6ff" : "transparent",
+              color: !active ? "#1d4ed8" : "#374151", fontWeight: 600,
+              display: "flex", alignItems: "center", gap: "8px",
+              borderBottom: "1px solid #f3f4f6",
+            }}>
+            <span style={{ width: "14px", color: "#1d4ed8", fontWeight: 700 }}>{!active ? "✓" : ""}</span>
+            All
+          </div>
+          {realOptions.map(opt => {
+            const isSel = selected.includes(opt);
             return (
-              <div key={opt} onClick={() => { onChange(opt); setOpen(false); }}
+              <div key={opt} onClick={() => toggleOption(opt)}
                 style={{
                   padding: "8px 14px", fontSize: "12px", cursor: "pointer",
                   background: isSel ? "#eff6ff" : "transparent",
@@ -544,8 +603,14 @@ function FilterSelect({ label, options, value, onChange, colorMap }) {
                   display: "flex", alignItems: "center", gap: "8px",
                   borderBottom: "1px solid #f3f4f6",
                 }}>
-                <span style={{ width: "14px", color: "#1d4ed8", fontWeight: 700 }}>{isSel ? "✓" : ""}</span>
-                {colorMap && opt !== "All" && (
+                <span style={{
+                  width: "13px", height: "13px", borderRadius: "3px", flexShrink: 0,
+                  border: `1.5px solid ${isSel ? "#1d4ed8" : "#cbd5e1"}`,
+                  background: isSel ? "#1d4ed8" : "white",
+                  color: "white", fontSize: "10px", fontWeight: 700, lineHeight: "11px",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>{isSel ? "✓" : ""}</span>
+                {colorMap && (
                   <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: colorMap[opt] || "#999", flexShrink: 0, display: "inline-block" }}></span>
                 )}
                 {opt}
@@ -560,8 +625,8 @@ function FilterSelect({ label, options, value, onChange, colorMap }) {
 
 // Shared filter bar used across tabs
 function FilterBar({ filters, setFilters, extraFilters, setExtraFilters, uniqueNames, uniqueRoles, uniqueTechs, uniqueLocs, uniqueCities, extraOptions }) {
-  const count = Object.values(filters).filter(v => v !== "All").length +
-                (extraFilters ? Object.values(extraFilters).filter(v => v !== "All").length : 0);
+  const count = Object.values(filters).filter(isFilterActive).length +
+                (extraFilters ? Object.values(extraFilters).filter(isFilterActive).length : 0);
   return (
     <div style={{
       display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center",
@@ -576,15 +641,15 @@ function FilterBar({ filters, setFilters, extraFilters, setExtraFilters, uniqueN
       <FilterSelect label="Role"     options={uniqueRoles}  value={filters.role}     onChange={v => setFilters(f => ({...f, role: v}))} />
       <FilterSelect label="Tech"     options={uniqueTechs}  value={filters.tech}     onChange={v => setFilters(f => ({...f, tech: v}))} colorMap={TECH_COLORS} />
       <FilterSelect label="Location" options={uniqueLocs}   value={filters.location} onChange={v => setFilters(f => ({...f, location: v}))} />
-      {uniqueCities && <FilterSelect label="City" options={uniqueCities} value={filters.city || "All"} onChange={v => setFilters(f => ({...f, city: v}))} />}
+      {uniqueCities && <FilterSelect label="City" options={uniqueCities} value={filters.city || []} onChange={v => setFilters(f => ({...f, city: v}))} />}
       {extraOptions && extraOptions.map(([lbl, key, opts, cmap]) => (
         <FilterSelect key={key} label={lbl} options={opts} value={extraFilters[key]}
           onChange={v => setExtraFilters(f => ({...f, [key]: v}))} colorMap={cmap} />
       ))}
       {count > 0 && (
         <button onClick={() => {
-          setFilters(f => Object.fromEntries(Object.keys(f).map(k => [k, "All"])));
-          if (setExtraFilters) setExtraFilters(f => Object.fromEntries(Object.keys(f).map(k => [k, "All"])));
+          setFilters(f => Object.fromEntries(Object.keys(f).map(k => [k, []])));
+          if (setExtraFilters) setExtraFilters(f => Object.fromEntries(Object.keys(f).map(k => [k, []])));
         }}
           style={{ marginLeft: "auto", fontSize: "11px", padding: "4px 12px", borderRadius: "6px", color: "#dc2626", background: "#fef2f2", border: "1px solid #fca5a5", cursor: "pointer", fontWeight: 500 }}>
           ✕ Clear {count} filter{count > 1 ? "s" : ""}
@@ -602,10 +667,11 @@ const TH_BASE = {
 };
 
 const TYPE_META = {
-  shift_change:  { icon: "ti-edit",            color: "#1d4ed8", bg: "#eff6ff", label: "Change shift",     desc: "Assign a specific shift to a resource on one or more days" },
+  shift_change:  { icon: "ti-edit",            color: "#1d4ed8", bg: "#eff6ff", label: "Change shift",     desc: "Assign a specific shift to a resource over one or more days" },
   leave:         { icon: "ti-beach",            color: "#d97706", bg: "#fffbeb", label: "Mark leave",       desc: "Mark a resource as OFF (leave) for a date range" },
   leave_replace: { icon: "ti-arrows-exchange",  color: "#7c3aed", bg: "#f5f3ff", label: "Leave with cover", desc: "Put someone on leave and assign their shift to a replacement" },
-  swap:          { icon: "ti-transfer",         color: "#0891b2", bg: "#ecfeff", label: "Swap shifts",      desc: "Swap the shifts of two resources on selected dates" },
+  swap:          { icon: "ti-transfer",         color: "#0891b2", bg: "#ecfeff", label: "Swap shifts",      desc: "Swap the shifts of two resources with each other over a date range" },
+  flip:          { icon: "ti-arrows-right-left",color: "#be185d", bg: "#fdf2f8", label: "Flip own shift",   desc: "Invert one resource's S1 ↔ S2 shift over a date range — no second resource needed" },
 };
 
 const SEL_STYLE = { width: "100%", padding: "7px 10px", border: "1px solid #e2e8f0", borderRadius: "7px", fontSize: "12px", background: "white", color: "#1e293b" };
@@ -617,6 +683,7 @@ function AdhocTab({ adhocForm, setAdhocForm, adhocList, setAdhocList, adhocMsg, 
   const meta = TYPE_META[type];
   const needsReplacer = type === "leave_replace" || type === "swap";
   const needsNewShift = type === "shift_change";
+  const showDateRange = type !== ""; // every adhoc type now supports an optional date range
   const daysInMonth = new Date(year, month, 0).getDate();
   const padM = String(month).padStart(2, "0");
 
@@ -662,6 +729,19 @@ function AdhocTab({ adhocForm, setAdhocForm, adhocList, setAdhocList, adhocMsg, 
       });
       logEntry.detail = `Swapped with ${replacer?.name}`;
       logEntry.replacer = replacer?.name;
+    } else if (type === "flip") {
+      const flipped = [];
+      dateRange.forEach(d => {
+        const current = newOverrides[+personId]?.[d] ?? roster[+personId]?.[d] ?? "OFF";
+        if (current === "S1" || current === "S2") {
+          const inverted = current === "S1" ? "S2" : "S1";
+          newOverrides[+personId] = { ...(newOverrides[+personId] || {}), [d]: inverted };
+          flipped.push(d);
+        }
+      });
+      if (flipped.length === 0) { setAdhocMsg("No S1/S2 weekday shifts found in that range to flip."); return; }
+      logEntry.dates = flipped;
+      logEntry.detail = "Own shift flipped (S1 ↔ S2)";
     }
 
     setManualOverrides(newOverrides);
@@ -727,7 +807,7 @@ function AdhocTab({ adhocForm, setAdhocForm, adhocList, setAdhocList, adhocMsg, 
           </div>
 
           <div>
-            <label style={LBL_STYLE}>{type === "leave" || type === "leave_replace" ? "Leave from" : "Date"}</label>
+            <label style={LBL_STYLE}>{type === "leave" || type === "leave_replace" ? "Leave from" : "From date"}</label>
             <input type="date" value={date}
               min={`${year}-${padM}-01`}
               max={`${year}-${padM}-${String(daysInMonth).padStart(2,"0")}`}
@@ -735,9 +815,9 @@ function AdhocTab({ adhocForm, setAdhocForm, adhocList, setAdhocList, adhocMsg, 
               style={INP_STYLE} />
           </div>
 
-          {(type === "leave" || type === "leave_replace") && (
+          {showDateRange && (
             <div>
-              <label style={LBL_STYLE}>Leave to (optional)</label>
+              <label style={LBL_STYLE}>{type === "leave" || type === "leave_replace" ? "Leave to (optional)" : "To date (optional)"}</label>
               <input type="date" value={toDate}
                 min={date || `${year}-${padM}-01`}
                 max={`${year}-${padM}-${String(daysInMonth).padStart(2,"0")}`}
@@ -785,6 +865,7 @@ function AdhocTab({ adhocForm, setAdhocForm, adhocList, setAdhocList, adhocMsg, 
             {type === "leave" && ` → marked OFF (leave)`}
             {type === "leave_replace" && previewReplacer && ` → ON LEAVE, covered by ${previewReplacer.name}`}
             {type === "swap" && previewReplacer && ` ↔ swap shifts with ${previewReplacer.name}`}
+            {type === "flip" && ` → own shift flipped (S1 ↔ S2)`}
             {date && ` on ${new Date(date + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`}
             {toDate && toDate > date && ` – ${new Date(toDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`}
             {reason && ` · "${reason}"`}
@@ -1333,11 +1414,11 @@ export default function App() {
   // ---- end backend sync ----
 
 
-  const [rosterFilters, setRosterFilters] = useState({ name: "All", tech: "All", role: "All", location: "All", city: "All" });
-  const [rosterExtra,   setRosterExtra]   = useState({ shift: "All" });
-  const [teamFilters,   setTeamFilters]   = useState({ name: "All", tech: "All", role: "All", location: "All" });
-  const [auditFilters,  setAuditFilters]  = useState({ name: "All", tech: "All", role: "All", location: "All" });
-  const [auditExtra,    setAuditExtra]    = useState({ status: "All" });
+  const [rosterFilters, setRosterFilters] = useState({ name: [], tech: [], role: [], location: [], city: [] });
+  const [rosterExtra,   setRosterExtra]   = useState({ shift: [] });
+  const [teamFilters,   setTeamFilters]   = useState({ name: [], tech: [], role: [], location: [] });
+  const [auditFilters,  setAuditFilters]  = useState({ name: [], tech: [], role: [], location: [] });
+  const [auditExtra,    setAuditExtra]    = useState({ status: [] });
 
   const monthName = new Date(year, month - 1, 1).toLocaleString("default", { month: "long" });
   const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -1360,21 +1441,29 @@ export default function App() {
   const uniqueStatus = ["All", "OK", "Review"];
   const shiftColorMap = Object.fromEntries(SHIFTS_LIST.map(s => [s, SHIFT_COLORS[s].border]));
 
+  function matchesFilter(sel, val) {
+    // No selection (or legacy "All") = filter inactive = everything matches.
+    // Otherwise match if val is one of the selected options (OR logic).
+    if (!sel || sel === "All") return true;
+    if (Array.isArray(sel)) return sel.length === 0 || sel.includes(val);
+    return sel === val;
+  }
+
   function applyBase(filters, members) {
     return members.filter(m => {
-      if (filters.name !== "All" && m.name !== filters.name) return false;
-      if (filters.tech !== "All" && m.tech !== filters.tech) return false;
-      if (filters.role !== "All" && m.role !== filters.role) return false;
-      if (filters.location !== "All" && m.location !== filters.location) return false;
-      if (filters.city && filters.city !== "All" && m.city !== filters.city) return false;
+      if (!matchesFilter(filters.name, m.name)) return false;
+      if (!matchesFilter(filters.tech, m.tech)) return false;
+      if (!matchesFilter(filters.role, m.role)) return false;
+      if (!matchesFilter(filters.location, m.location)) return false;
+      if (!matchesFilter(filters.city, m.city)) return false;
       return true;
     });
   }
 
   const filteredRoster = useMemo(() => {
     let members = applyBase(rosterFilters, teamMembers);
-    if (rosterExtra.shift !== "All") {
-      members = members.filter(m => Object.values(roster[m.id] || {}).includes(rosterExtra.shift));
+    if (rosterExtra.shift && rosterExtra.shift.length > 0) {
+      members = members.filter(m => Object.values(roster[m.id] || {}).some(s => rosterExtra.shift.includes(s)));
     }
     return members;
   }, [rosterFilters, rosterExtra, roster]);
@@ -1382,10 +1471,10 @@ export default function App() {
   const filteredTeam  = useMemo(() => applyBase(teamFilters, teamMembers), [teamFilters, teamMembers]);
   const filteredAudit = useMemo(() => {
     let members = applyBase(auditFilters, teamMembers);
-    if (auditExtra.status !== "All") {
+    if (auditExtra.status && auditExtra.status.length > 0) {
       members = members.filter(m => {
         const ok = stats[m.id].workDays >= conditions.minDaysPerMonth;
-        return auditExtra.status === "OK" ? ok : !ok;
+        return auditExtra.status.includes(ok ? "OK" : "Review");
       });
     }
     return members;
@@ -1437,9 +1526,9 @@ export default function App() {
 
 
   const activeTabFilterCount = () => {
-    if (tab === "roster") return Object.values(rosterFilters).filter(v=>v!=="All").length + Object.values(rosterExtra).filter(v=>v!=="All").length;
-    if (tab === "team")   return Object.values(teamFilters).filter(v=>v!=="All").length;
-    if (tab === "audit")  return Object.values(auditFilters).filter(v=>v!=="All").length + Object.values(auditExtra).filter(v=>v!=="All").length;
+    if (tab === "roster") return Object.values(rosterFilters).filter(isFilterActive).length + Object.values(rosterExtra).filter(isFilterActive).length;
+    if (tab === "team")   return Object.values(teamFilters).filter(isFilterActive).length;
+    if (tab === "audit")  return Object.values(auditFilters).filter(isFilterActive).length + Object.values(auditExtra).filter(isFilterActive).length;
     return 0;
   };
 
@@ -1570,11 +1659,11 @@ export default function App() {
             {SHIFTS_LIST.map(s => {
               const c = SHIFT_COLORS[s];
               return (
-                <span key={s} onClick={() => setRosterExtra(f => ({...f, shift: f.shift === s ? "All" : s}))}
+                <span key={s} onClick={() => setRosterExtra(f => ({...f, shift: f.shift?.includes(s) ? f.shift.filter(x => x !== s) : [...(f.shift || []), s]}))}
                   style={{
                     fontSize: "11px", padding: "3px 10px", borderRadius: "5px", fontWeight: 600,
-                    background: c.bg, color: c.text, border: `1.5px solid ${rosterExtra.shift === s ? c.text : c.border}`,
-                    cursor: "pointer", outline: rosterExtra.shift === s ? `2px solid ${c.border}` : "none", outlineOffset: "1px"
+                    background: c.bg, color: c.text, border: `1.5px solid ${rosterExtra.shift?.includes(s) ? c.text : c.border}`,
+                    cursor: "pointer", outline: rosterExtra.shift?.includes(s) ? `2px solid ${c.border}` : "none", outlineOffset: "1px"
                   }}>
                   {s}
                 </span>
@@ -1601,12 +1690,13 @@ export default function App() {
               <thead>
                 <tr>
                   {[["Resource",0],["Role",190],["Tech",335],["Location",430],["City",512]].map(([h, left]) => (
-                    <th key={h} style={{ ...TH_BASE, position: "sticky", left: left, zIndex: 20, boxShadow: h === "City" ? "2px 0 6px rgba(0,0,0,0.08)" : "none" }}>{h}</th>
+                    <th key={h} style={{ ...TH_BASE, position: "sticky", top: 0, left: left, zIndex: 25, boxShadow: h === "City" ? "2px 0 6px rgba(0,0,0,0.08)" : "none" }}>{h}</th>
                   ))}
-                  <th style={TH_BASE}>Contact</th>
+                  <th style={{ ...TH_BASE, position: "sticky", top: 0, zIndex: 15 }}>Contact</th>
                   {days.map(d => (
                     <th key={d.date} style={{
                       ...TH_BASE, textAlign: "center", padding: "5px 2px",
+                      position: "sticky", top: 0, zIndex: 15,
                       background: d.isWeekend ? "#fef3c7" : "#f1f5f9",
                       borderBottom: `2px solid ${d.isWeekend ? "#f59e0b" : "#94a3b8"}`,
                       color: d.isWeekend ? "#92400e" : "#475569",
@@ -1615,8 +1705,8 @@ export default function App() {
                       <div style={{ fontSize: "9px", fontWeight: 500 }}>{["Su","Mo","Tu","We","Th","Fr","Sa"][d.dayOfWeek]}</div>
                     </th>
                   ))}
-                  <th style={{ ...TH_BASE, textAlign: "center" }}>Days</th>
-                  <th style={{ ...TH_BASE, textAlign: "center" }}>Off</th>
+                  <th style={{ ...TH_BASE, textAlign: "center", position: "sticky", top: 0, zIndex: 15 }}>Days</th>
+                  <th style={{ ...TH_BASE, textAlign: "center", position: "sticky", top: 0, zIndex: 15 }}>Off</th>
                 </tr>
               </thead>
               <tbody>
@@ -1657,7 +1747,7 @@ export default function App() {
                         const shift = roster[member.id]?.[d.date] || "OFF";
                         const col = SHIFT_COLORS[shift] || SHIFT_COLORS.OFF;
                         const isSel = selectedCell?.memberId === member.id && selectedCell?.date === d.date;
-                        const isHighlighted = rosterExtra.shift !== "All" && shift === rosterExtra.shift;
+                        const isHighlighted = rosterExtra.shift && rosterExtra.shift.length > 0 && rosterExtra.shift.includes(shift);
                         return (
                           <td key={d.date} onClick={() => canEdit ? setSelectedCell(s => (s?.memberId===member.id && s?.date===d.date) ? null : {memberId:member.id, date:d.date}) : null}
                             style={{
