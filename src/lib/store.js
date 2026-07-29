@@ -67,6 +67,62 @@ export const saveMonthOverrides = (year, month, overrides) =>
 export const saveMonthAdhocList = (year, month, adhocList) =>
   kvSet(monthKey(year, month, "adhoc"), adhocList);
 
+// ---- Full generated roster schedule persistence ----
+// Stored in a dedicated table so finalized monthly rosters are not only regenerated in memory.
+// Required table: roster_months(year int, month int, roster jsonb, source text, updated_by text, updated_at timestamptz).
+export async function loadRosterMonth(year, month) {
+  if (!supabase) return null;
+
+  const { data, error } = await supabase
+    .from("roster_months")
+    .select("roster, source, updated_by, updated_at")
+    .eq("year", year)
+    .eq("month", month)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`[store] failed to load roster_months ${year}-${month}`, error);
+    return null;
+  }
+
+  return data?.roster || null;
+}
+
+export async function saveRosterMonth(year, month, roster, source = "generated", updatedBy = null) {
+  if (!supabase) return;
+
+  const { error } = await supabase
+    .from("roster_months")
+    .upsert({
+      year,
+      month,
+      roster: roster || {},
+      source,
+      updated_by: updatedBy,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "year,month" });
+
+  if (error) {
+    console.error(`[store] failed to save roster_months ${year}-${month}`, error);
+    throw error;
+  }
+}
+
+export async function deleteRosterMonth(year, month) {
+  if (!supabase) return;
+
+  const { error } = await supabase
+    .from("roster_months")
+    .delete()
+    .eq("year", year)
+    .eq("month", month);
+
+  if (error) {
+    console.error(`[store] failed to delete roster_months ${year}-${month}`, error);
+    throw error;
+  }
+}
+
 // ---- Audit log of PIN changes / logins (optional, append-only) ----
 export async function logAuditEvent(event) {
   if (!supabase) return;
