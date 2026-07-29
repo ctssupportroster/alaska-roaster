@@ -1,9 +1,12 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import XLSX from "xlsx-js-style";
+import { saveAs } from "file-saver";
 import {
   isBackendConfigured,
   loadTeamMembers, saveTeamMembers,
   loadConditions, saveConditions,
   loadMonthData, saveMonthOverrides, saveMonthAdhocList,
+  loadRosterMonth, saveRosterMonth, deleteRosterMonth,
   logAuditEvent,
 } from "./lib/store";
 
@@ -14,8 +17,8 @@ const INITIAL_TEAM = [
   { id: 4,  name: "Guy Andrichuk",         tech: "Databricks",         role: "Manager",            location: "Onsite",   city: "Seattle",                                     phone: "+1 206 555 1004", pin: "1010" },
   { id: 5,  name: "Krithika",              tech: "IDMC",               role: "Lead - IDMC",        location: "Offshore", city: "Chennai",   isLead: true,                    phone: "+91 98765 10005", pin: "1010" },
   { id: 6,  name: "Gokuldass",             tech: "Databricks",         role: "Lead - Databricks",  location: "Offshore", city: "Chennai",   isLead: true,                    phone: "+91 98765 10006", pin: "1010" },
-  { id: 7,  name: "Hari Annamalai",        tech: "IDMC",               role: "Sr. Data Engineer",  location: "Offshore", city: "Chennai",   isSenior: true,                  phone: "+91 98765 10007", pin: "1234" },
-  { id: 8,  name: "Madhu",                 tech: "IDMC",               role: "Lead - IDMC",        location: "Offshore", city: "Chennai",   isLead: true,                    phone: "+91 98765 10008", pin: "1010" },
+  { id: 7,  name: "Madhu",                 tech: "IDMC",               role: "Data Engineer",      location: "Offshore", city: "Chennai",                                   phone: "+91 98765 10007", pin: "1234" },
+  { id: 8,  name: "Hari Annamalai",        tech: "IDMC",               role: "Sr. Data Engineer",  location: "Offshore", city: "Chennai",   isSenior: true, phone: "+91 98765 10008", pin: "1234" },
   { id: 9,  name: "Sathish",               tech: "IDMC",               role: "Data Engineer",      location: "Offshore", city: "Chennai",                                    phone: "+91 98765 10009", pin: "1234" },
   { id: 10, name: "Sriram",                tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Chennai",                                    phone: "+91 98765 10010", pin: "1234" },
   { id: 11, name: "Shivani",               tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Hyderabad", swapShift: true,                    phone: "+91 98765 10011", pin: "1234" },
@@ -25,8 +28,8 @@ const INITIAL_TEAM = [
   { id: 15, name: "Supraja",               tech: "IDMC",               role: "Data Engineer",      location: "Offshore", city: "Bangalore",                                  phone: "+91 98765 10015", pin: "1234" },
   { id: 16, name: "Bhavani",               tech: "Oracle",             role: "Data Engineer",      location: "Offshore", city: "Chennai",                                    phone: "+91 98765 10016", pin: "1234" },
   { id: 17, name: "Madan Saravanan",       tech: "Oracle",             role: "Lead - Oracle ODI",  location: "Offshore", city: "Chennai",   isLead: true,                    phone: "+91 98765 10017", pin: "1010" },
-  { id: 18, name: "Sathyanarayanan",       tech: "Oracle",             role: "Sr. Data Engineer",  location: "Offshore", city: "Chennai",   isSenior: true,                  phone: "+91 98765 10018", pin: "1234" },
-  { id: 19, name: "Harsh Tailor",          tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Mumbai",                                     phone: "+91 98765 10019", pin: "1234" },
+  { id: 18, name: "Harsh Tailor",          tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Mumbai",                                    phone: "+91 98765 10018", pin: "1234" },
+  { id: 19, name: "Sathyanarayanan",       tech: "Oracle",             role: "Sr. Data Engineer",  location: "Offshore", city: "Chennai",   isSenior: true,                  phone: "+91 98765 10019", pin: "1234" },
   { id: 20, name: "Raghavendra",           tech: "Databricks",         role: "Data Engineer",      location: "Offshore", city: "Bangalore",                                  phone: "+91 98765 10020", pin: "1234" },
   { id: 21, name: "Yashashree",            tech: "IDMC",               role: "Data Engineer",      location: "Offshore", city: "Pune",                                       phone: "+91 98765 10021", pin: "1234" },
   { id: 22, name: "Soumyadip",             tech: "IDMC",               role: "Data Engineer",      location: "Offshore", city: "Kolkata",                                    phone: "+91 98765 10022", pin: "1234" },
@@ -43,7 +46,53 @@ const INITIAL_TEAM = [
 ];
 
 const ROLES = ["Sr. Manager","Manager","Lead - IDMC","Lead - Databricks","Lead - Oracle ODI","Sr. Data Engineer","Data Engineer"];
+const DESIGNATIONS = ["SPM","M","SA","PA","A","PAT"];
 const TECHS = ["IDMC","Databricks","Oracle","Project Management"];
+
+// First month from which the roster history starts.
+const ROSTER_START = {
+  year: 2026,
+  month: 7,
+  day: 13
+};
+
+// Manual production roster seed supplied for July 13-31, 2026.
+// August and future rosters use this seed for cross-month weekend history
+// and bi-weekly S1/S2 continuation.
+const JULY_2026_SEED_ROSTER = {
+  1: { 13: "GEN", 14: "GEN", 15: "GEN", 16: "GEN", 17: "GEN", 18: "OFF", 19: "OFF", 20: "GEN", 21: "GEN", 22: "GEN", 23: "GEN", 24: "GEN", 25: "OFF", 26: "OFF", 27: "GEN", 28: "GEN", 29: "GEN", 30: "GEN", 31: "GEN" },
+  2: { 13: "G-PST", 14: "G-PST", 15: "G-PST", 16: "G-PST", 17: "G-PST", 18: "OFF", 19: "OFF", 20: "G-PST", 21: "G-PST", 22: "G-PST", 23: "G-PST", 24: "G-PST", 25: "OFF", 26: "OFF", 27: "G-PST", 28: "G-PST", 29: "G-PST", 30: "G-PST", 31: "G-PST" },
+  3: { 13: "G-PST", 14: "G-PST", 15: "G-PST", 16: "G-PST", 17: "G-PST", 18: "OFF", 19: "OFF", 20: "G-PST", 21: "G-PST", 22: "G-PST", 23: "G-PST", 24: "G-PST", 25: "OFF", 26: "OFF", 27: "G-PST", 28: "G-PST", 29: "G-PST", 30: "G-PST", 31: "G-PST" },
+  4: { 13: "G-PST", 14: "G-PST", 15: "G-PST", 16: "G-PST", 17: "G-PST", 18: "OFF", 19: "OFF", 20: "G-PST", 21: "G-PST", 22: "G-PST", 23: "G-PST", 24: "G-PST", 25: "OFF", 26: "OFF", 27: "G-PST", 28: "G-PST", 29: "G-PST", 30: "G-PST", 31: "G-PST" },
+  5: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "OFF", 19: "OFF", 20: "S2", 21: "S2", 22: "S2", 23: "S2", 24: "S2", 25: "OFF", 26: "OFF", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  6: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "OFF", 19: "OFF", 20: "S2", 21: "S2", 22: "S2", 23: "S2", 24: "S2", 25: "OFF", 26: "OFF", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  7: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "OFF", 20: "S1", 21: "S1", 22: "S1", 23: "S1", 24: "S1", 25: "OFF", 26: "OFF", 27: "S2", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  8: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "WS2", 19: "OFF", 20: "S2", 21: "S2", 22: "S2", 23: "S2", 24: "S2", 25: "OFF", 26: "OFF", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  9: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "OFF", 19: "WS1", 20: "S2", 21: "S2", 22: "S2", 23: "S2", 24: "OFF", 25: "OFF", 26: "OFF", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  10: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "OFF", 20: "S1", 21: "S1", 22: "S1", 23: "S1", 24: "S1", 25: "WS2", 26: "OFF", 27: "OFF", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  11: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "WS1", 20: "S1", 21: "OFF", 22: "S1", 23: "S1", 24: "S1", 25: "OFF", 26: "OFF", 27: "S2", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  12: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "OFF", 19: "OFF", 20: "S2", 21: "S2", 22: "S2", 23: "S2", 24: "OFF", 25: "OFF", 26: "WS1", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  13: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "WS1", 19: "OFF", 20: "OFF", 21: "S1", 22: "S1", 23: "S1", 24: "S1", 25: "OFF", 26: "OFF", 27: "S2", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  14: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "OFF", 20: "S1", 21: "S1", 22: "S1", 23: "S1", 24: "OFF", 25: "OFF", 26: "WS1", 27: "S2", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  15: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "WS1", 19: "OFF", 20: "OFF", 21: "S2", 22: "S2", 23: "S2", 24: "S2", 25: "OFF", 26: "OFF", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  16: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "WS1", 19: "OFF", 20: "OFF", 21: "S2", 22: "S2", 23: "S2", 24: "S2", 25: "OFF", 26: "OFF", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  17: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "OFF", 20: "S1", 21: "S1", 22: "S1", 23: "S1", 24: "S1", 25: "OFF", 26: "OFF", 27: "S2", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  18: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "OFF", 19: "OFF", 20: "S2", 21: "S2", 22: "S2", 23: "S2", 24: "S2", 25: "WS2", 26: "OFF", 27: "OFF", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  19: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "OFF", 20: "S1", 21: "S1", 22: "S1", 23: "S1", 24: "S1", 25: "OFF", 26: "OFF", 27: "S2", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  20: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "OFF", 19: "WS2", 20: "S2", 21: "OFF", 22: "S2", 23: "S2", 24: "S2", 25: "OFF", 26: "OFF", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  21: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "OFF", 20: "S1", 21: "S1", 22: "S1", 23: "S1", 24: "S1", 25: "WS1", 26: "OFF", 27: "OFF", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  22: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "OFF", 19: "WS2", 20: "S2", 21: "OFF", 22: "S2", 23: "S2", 24: "S2", 25: "OFF", 26: "OFF", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  23: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "OFF", 20: "S1", 21: "S1", 22: "S1", 23: "S1", 24: "OFF", 25: "OFF", 26: "WS2", 27: "S2", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  24: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "WS2", 19: "OFF", 20: "OFF", 21: "S2", 22: "S2", 23: "S2", 24: "S2", 25: "OFF", 26: "OFF", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  25: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "OFF", 20: "S1", 21: "S1", 22: "S1", 23: "S1", 24: "S1", 25: "WS1", 26: "OFF", 27: "OFF", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  26: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "OFF", 20: "S1", 21: "S1", 22: "S1", 23: "S1", 24: "OFF", 25: "OFF", 26: "WS2", 27: "S2", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  27: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "WS2", 19: "OFF", 20: "OFF", 21: "S2", 22: "S2", 23: "S2", 24: "S2", 25: "OFF", 26: "OFF", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  28: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "WS1", 20: "S1", 21: "OFF", 22: "S1", 23: "S1", 24: "S1", 25: "OFF", 26: "OFF", 27: "S2", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  29: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "OFF", 19: "OFF", 20: "S2", 21: "S2", 22: "S2", 23: "S2", 24: "S2", 25: "WS1", 26: "OFF", 27: "OFF", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  30: { 13: "S2", 14: "S2", 15: "S2", 16: "S2", 17: "S2", 18: "OFF", 19: "WS2", 20: "S2", 21: "OFF", 22: "S2", 23: "S2", 24: "S2", 25: "OFF", 26: "OFF", 27: "S1", 28: "S1", 29: "S1", 30: "S1", 31: "S1" },
+  31: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "OFF", 20: "S1", 21: "S1", 22: "S1", 23: "S1", 24: "OFF", 25: "OFF", 26: "WS1", 27: "S2", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+  32: { 13: "S1", 14: "S1", 15: "S1", 16: "S1", 17: "S1", 18: "OFF", 19: "OFF", 20: "S1", 21: "S1", 22: "S1", 23: "S1", 24: "OFF", 25: "OFF", 26: "WS2", 27: "S2", 28: "S2", 29: "S2", 30: "S2", 31: "S2" },
+};
 
 function deriveFlags(role) {
   return {
@@ -54,11 +103,42 @@ function deriveFlags(role) {
   };
 }
 
-const EMPTY_FORM = { name: "", tech: "IDMC", role: "Data Engineer", location: "Offshore", city: "", phone: "", pin: "" };
+
+const DESIGNATION_BY_ID = {
+  1: "SPM", 2: "SPM", 3: "SPM",
+  4: "M", 5: "M", 17: "M",
+  6: "SA", 7: "SA", 8: "SA", 19: "SA",
+  20: "PA", 25: "PA", 28: "PA",
+  9: "A", 10: "A", 11: "A", 12: "A", 13: "A", 14: "A", 15: "A", 16: "A", 23: "A", 24: "A",
+  18: "PAT", 21: "PAT", 22: "PAT", 26: "PAT", 27: "PAT", 29: "PAT", 30: "PAT", 31: "PAT", 32: "PAT",
+};
+function designationForMember(member) {
+  return DESIGNATION_BY_ID[member.id] || member.designation || "A";
+}
+// Align persisted team data with the updated roster prompt.
+// This prevents an old Supabase team snapshot from treating the wrong person as ID 8 / ID 19.
+function applyPromptMemberClassification(members) {
+  const overrides = {
+    7:  { name: "Madhu", role: "Data Engineer", tech: "IDMC", isLead: false, isSenior: false, fixedShift: undefined },
+    8:  { name: "Hari Annamalai", role: "Sr. Data Engineer", tech: "IDMC", isLead: false, isSenior: true },
+    18: { name: "Harsh Tailor", role: "Data Engineer", tech: "Databricks", isLead: false, isSenior: false, fixedShift: undefined },
+    19: { name: "Sathyanarayanan", role: "Sr. Data Engineer", tech: "Oracle", isLead: false, isSenior: true, fixedShift: undefined },
+  };
+
+  return members.map(member => {
+    const override = overrides[member.id];
+    const base = override ? { ...member, ...override } : { ...member };
+    base.designation = designationForMember(base);
+    if (base.fixedShift === undefined) delete base.fixedShift;
+    return base;
+  });
+}
+
+const EMPTY_FORM = { name: "", tech: "IDMC", role: "Data Engineer", designation: "A", location: "Offshore", city: "", phone: "", pin: "" };
 
 function MemberModal({ member, onSave, onClose }) {
   const [form, setForm] = useState(member
-    ? { name: member.name, tech: member.tech, role: member.role, location: member.location, city: member.city || "", phone: member.phone || "", pin: member.pin || "" }
+    ? { name: member.name, tech: member.tech, role: member.role, designation: member.designation || designationForMember(member), location: member.location, city: member.city || "", phone: member.phone || "", pin: member.pin || "" }
     : { ...EMPTY_FORM });
   const [err, setErr] = useState("");
 
@@ -89,6 +169,7 @@ function MemberModal({ member, onSave, onClose }) {
           ["Contact number", "phone", "tel", null, "+91 98765 43210"],
           ["Technology", "tech", "select", TECHS, null],
           ["Role", "role", "select", ROLES, null],
+          ["Designation", "designation", "select", DESIGNATIONS, null],
           ["Location", "location", "select", ["Onsite","Offshore"], null],
           ["PIN (4+ digits)", "pin", "password", null, "e.g. 1234"],
         ].map(([lbl, key, type, opts, ph]) => (
@@ -180,327 +261,756 @@ const TECH_COLORS = {
   IDMC: "#1d4ed8", Databricks: "#15803d", Oracle: "#b91c1c", "Project Management": "#6d28d9",
 };
 
-function generateRoster(year, month, conditions, members) {
+// Browser dark-theme guard. The app is intentionally light themed; this prevents
+// Chrome/Edge/Safari from auto-darkening native date/time/password/select controls.
+const LIGHT_THEME_CSS = `
+  :root { color-scheme: light; }
+  html, body, #root { background: #ffffff; color: #1e293b; }
+  input, select, textarea, button { color-scheme: light; }
+  input[type="date"], input[type="time"], input[type="password"], input[type="text"], input[type="number"], input[type="tel"] {
+    background-color: #ffffff;
+    color: #1e293b;
+  }
+  select { background-color: #ffffff; color: #1e293b; }
+`;
+function LightThemeGuard() {
+  return <style>{LIGHT_THEME_CSS}</style>;
+}
+
+function generateRoster(year, month, conditions, members, options = {}) {
   const daysInMonth = new Date(year, month, 0).getDate();
   const days = Array.from({ length: daysInMonth }, (_, i) => {
-    const d = new Date(year, month - 1, i + 1);
-    return { date: i + 1, dayOfWeek: d.getDay() };
+    const date = i + 1;
+    const d = new Date(year, month - 1, date);
+    return {
+      date,
+      dayOfWeek: d.getDay(),
+      isWeekend: d.getDay() === 0 || d.getDay() === 6,
+    };
   });
 
-  // ── Rotation anchor: find the first Monday of the month ───────────────
-  // The shift rotates every 2 weeks, always starting on rotationMonday2.
-  // There is NO pre-rotation Sunday buffer — WS2 ends 23:00 Sun, new shift
-  // starts 06:00+ Mon, giving a natural 7-hour rest gap. No day needs to be
-  // blocked for rotation purposes.
-  const firstMonday = days.find(d => d.dayOfWeek === 1)?.date ?? 1;
-  const rotationMonday2 = firstMonday + 14;
+  // =====================================================
+  // UPDATED ROSTER CONSTANTS - single source of truth
+  // =====================================================
+  const MANAGEMENT = {
+    SENIOR_MANAGER: [1],
+    ONSITE_MANAGERS: [2, 3, 4],
+  };
+  const OFFSHORE_GEN = [];
+  const LEADS_IDS = [5, 6, 7, 17];
+  const WEEKEND_EXEMPT_IDS = [8,19];
 
-  function getBiWeekBlock(date) {
-    if (date < firstMonday) return 0;
-    return date < rotationMonday2 ? 0 : 1;
-  }
+  // Combo groups from the supplied prompt. Do not alter these IDs in rotation logic.
+  const COMBO1_IDS = [7,  10, 11, 13, 14, 17, 19, 21, 23, 25, 26, 28, 31, 32];
+  const COMBO2_IDS = [5, 6, 8, 9, 12, 15, 16, 18, 20, 22, 24, 27, 29, 30];
+  const COMBO1_NON_LEADS = [10, 11, 13, 14,  21, 23, 25, 26, 28, 31, 32];
+  const COMBO2_NON_LEADS = [ 9, 12, 15, 16, 18, 20, 22, 24, 27, 29, 30];
+  const WEEKEND_ELIGIBLE_IDS = [...COMBO1_NON_LEADS, ...COMBO2_NON_LEADS];
 
-  // Empty set — no rotation eves. Kept for any legacy references.
-  const rotationEves = new Set();
+  // Flexible weekend staffing. Auto-generation uses the minimum coverage required
+  // while enforcing designation mix for every weekend shift.
+  // Manual/future coverage can be increased up to 4 per shift without failing validation.
+  const WEEKEND_MIN_STAFFING = { WS1: 2, WS2: 2 };
+  const WEEKEND_MAX_STAFFING = { WS1: 4, WS2: 4 };
+  const WEEKEND_AUTO_STAFFING = { WS1: 2, WS2: 2 };
+  // Each generated weekend shift starts with one A/PA; second slot prefers PAT,
+  // but can fall back to another A/PA if needed to preserve coverage/equal workdays.
+  const WEEKEND_SLOT_SEQUENCE = [
+    { shift: "WS2", requiredGroup: "A_PA" },
+    { shift: "WS2", requiredGroup: "PAT" },
+    { shift: "WS1", requiredGroup: "A_PA" },
+    { shift: "WS1", requiredGroup: "PAT" },
+  ];
 
-  // Weekday shift: uses Monday-anchored bi-week block
-  function wdShift(date, baseIsS1) {
-    const block = getBiWeekBlock(date);
-    return (block === 0 ? baseIsS1 : !baseIsS1) ? "S1" : "S2";
-  }
+  const idSet = ids => new Set(ids);
+  const seniorManagerIds = idSet(MANAGEMENT.SENIOR_MANAGER);
+  const onsiteManagerIds = idSet(MANAGEMENT.ONSITE_MANAGERS);
+  const offshoreGenIds = idSet(OFFSHORE_GEN);
+  const leadIds = idSet(LEADS_IDS);
+  const weekendExemptIds = idSet(WEEKEND_EXEMPT_IDS);
+  const combo1Ids = idSet(COMBO1_IDS);
+  const combo2Ids = idSet(COMBO2_IDS);
+  const weekendEligibleIds = idSet(WEEKEND_ELIGIBLE_IDS);
 
-  // Week number within month (0-indexed)
-  function getWeekNum(date) { return Math.floor((date - 1) / 7); }
-
-  const MIN_OFF = 8; // baseline minimum off days per member per month
-
-  // Leads/Managers always have Sat+Sun off — their natural floor is
-  // 2 × (number of weekend days in the month), which can exceed MIN_OFF
-  // in months with 5 Saturdays+5 Sundays (e.g. August 2026 = 10 days).
-  // Use the larger of MIN_OFF or this natural floor so everyone in the
-  // Leads/Managers group lands on the SAME number, never forcing a
-  // lead to work a weekend just to hit a lower fixed target.
-  const weekendDayCount = days.filter(d => d.dayOfWeek === 0 || d.dayOfWeek === 6).length;
-  const LEAD_MIN_OFF = Math.max(MIN_OFF, weekendDayCount);
-
-  // ── Pre-compute weekend shift assignments ────────────────────────────────
-  // NEW MODEL:
-  // - Only non-lead, offshore, non-GEN members are eligible for weekend shifts
-  // - EVERY Saturday and EVERY Sunday gets coverage (not alternating days)
-  // - Each weekend day is split into two shift groups: WS1 (Weekend Shift 1)
-  //   and WS2 (Weekend Shift 2), with exactly 3 people on each — 6 total per day
-  // - Senior + junior mix maintained within each 3-person group where possible
-  // - Tech diversity (IDMC/Databricks/Oracle) spread across the 3-person groups
-  // - Each member alternates which weekends they work (works wk1, off wk2, etc.)
-  //   so nobody works every single weekend, but every Sat/Sun is still covered
-  //   by the half of the pool that IS working that weekend
-  // - No rotation-eve restriction (WS2 ends well before the Monday rotation)
-
-  const eligibleForWE = members.filter(m =>
-    m.location === "Offshore" && !m.isLead && !m.isManager && !m.fixedShift
-  );
-
-  // Sort: seniors first, then by tech to ensure diversity in splits
-  const techOrder = { IDMC: 0, Databricks: 1, Oracle: 2 };
-  const sortedEligible = [...eligibleForWE].sort((a, b) => {
-    if ((b.isSenior ? 1 : 0) !== (a.isSenior ? 1 : 0)) return (b.isSenior ? 1 : 0) - (a.isSenior ? 1 : 0);
-    return (techOrder[a.tech] ?? 3) - (techOrder[b.tech] ?? 3);
-  });
-
-  // Get all week numbers present in the month
-  const weekNums = [...new Set(days.map(d => getWeekNum(d.date)))];
-
-  // weAssignments[memberId][date] = "WS1" | "WS2" | "OFF"
-  const weAssignments = {};
-  const weCount = {};
-  eligibleForWE.forEach(m => { weAssignments[m.id] = {}; weCount[m.id] = 0; });
-
-  // All actual weekend days (Sat or Sun) in the month, individually
   const weekendDays = days.filter(d => d.dayOfWeek === 6 || d.dayOfWeek === 0);
+  const TARGET_OFF_DAYS = weekendDays.length;
+  const TARGET_WORK_DAYS = daysInMonth - TARGET_OFF_DAYS;
 
-  // Build a 3+3 group for a given pool of workers (called once per weekend day)
-  function buildWS1WS2(pool) {
-    const seniors = pool.filter(m => m.isSenior);
-    const juniors = pool.filter(m => !m.isSenior);
-    const ws1 = [];
-    const ws2 = [];
+  function memberById(id) {
+    return members.find(m => m.id === id);
+  }
 
-    // Distribute seniors: 2+ → one each in WS1/WS2; 1 → WS1 only; 0 → none
-    if (seniors.length >= 2) {
-      ws1.push(seniors[0]);
-      ws2.push(seniors[1]);
-      seniors.slice(2).forEach((m, i) => (i % 2 === 0 ? ws1 : ws2).push(m));
-    } else if (seniors.length === 1) {
-      ws1.push(seniors[0]);
+  function isHardFixed(member) {
+    return seniorManagerIds.has(member.id) || onsiteManagerIds.has(member.id) || offshoreGenIds.has(member.id);
+  }
+
+  function isNeverWeekend(member) {
+    return isHardFixed(member) || leadIds.has(member.id) || weekendExemptIds.has(member.id);
+  }
+
+  function isWeekendEligible(member) {
+    return weekendEligibleIds.has(member.id) && !isNeverWeekend(member);
+  }
+
+  function startOfWeekMonday(dt) {
+    const d = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+    const offset = (d.getDay() + 6) % 7; // Monday=0, Sunday=6
+    d.setDate(d.getDate() - offset);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  function firstMondayOnOrAfter(dt) {
+    const d = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+    const daysUntilMonday = (8 - d.getDay()) % 7;
+    d.setDate(d.getDate() + daysUntilMonday);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  function getWeekendAnchor(date) {
+    const day = days.find(d => d.date === date);
+    if (!day || (day.dayOfWeek !== 6 && day.dayOfWeek !== 0)) return null;
+    return day.dayOfWeek === 6 ? date : date - 1;
+  }
+
+  function getWeekendDays(anchor) {
+    return weekendDays.filter(d => getWeekendAnchor(d.date) === anchor);
+  }
+
+  function getWeekendAnchors() {
+    return [...new Set(weekendDays.map(d => getWeekendAnchor(d.date)).filter(v => v !== null))]
+      .sort((a, b) => a - b);
+  }
+
+  function getSeedRosterForMonth(seedYear, seedMonth) {
+    if (seedYear === 2026 && seedMonth === 7) return JULY_2026_SEED_ROSTER;
+    return null;
+  }
+
+  function deriveSeededMonthLastWeekendWorkers(seedYear, seedMonth) {
+    const seededRoster = getSeedRosterForMonth(seedYear, seedMonth);
+    if (!seededRoster) return null;
+
+    const seedStartDay = seedYear === ROSTER_START.year && seedMonth === ROSTER_START.month
+      ? (ROSTER_START.day || 1)
+      : 1;
+    const seedDaysInMonth = new Date(seedYear, seedMonth, 0).getDate();
+    const seedWeekendDays = Array.from({ length: seedDaysInMonth }, (_, i) => {
+      const date = i + 1;
+      const d = new Date(seedYear, seedMonth - 1, date);
+      return { date, dayOfWeek: d.getDay() };
+    }).filter(d => d.date >= seedStartDay && (d.dayOfWeek === 6 || d.dayOfWeek === 0));
+
+    if (seedWeekendDays.length === 0) return new Set();
+
+    const seedAnchor = d => d.dayOfWeek === 6 ? d.date : d.date - 1;
+    const lastAnchor = Math.max(...seedWeekendDays.map(seedAnchor));
+    const lastWeekendDays = seedWeekendDays.filter(d => seedAnchor(d) === lastAnchor);
+    const workers = new Set();
+
+    members.forEach(member => {
+      if (lastWeekendDays.some(d => isWeekendShift(seededRoster?.[member.id]?.[d.date]))) {
+        workers.add(member.id);
+      }
+    });
+
+    return workers;
+  }
+
+  function derivePreviousMonthLastWeekendWorkers() {
+    if (options.skipCrossMonthHistory) return new Set();
+
+    const prev = new Date(year, month - 2, 1);
+    const prevYear = prev.getFullYear();
+    const prevMonth = prev.getMonth() + 1;
+
+    const seededWorkers = deriveSeededMonthLastWeekendWorkers(prevYear, prevMonth);
+    if (seededWorkers) return seededWorkers;
+
+    if (
+      year === ROSTER_START.year &&
+      month === ROSTER_START.month
+    ) {
+      return new Set();
     }
 
-    // Distribute juniors by tech, interleaved, capped at 3 each
-    const jByTech = { IDMC: [], Databricks: [], Oracle: [], other: [] };
-    juniors.forEach(m => (jByTech[m.tech] ?? jByTech.other).push(m));
-    let toggle = 0;
-    ['IDMC', 'Databricks', 'Oracle', 'other'].forEach(tech => {
-      jByTech[tech].forEach(m => {
-        if (ws1.length < 3 && (toggle % 2 === 0 || ws2.length >= 3)) { ws1.push(m); }
-        else if (ws2.length < 3) { ws2.push(m); }
-        else if (ws1.length < 3) { ws1.push(m); }
-        toggle++;
+    const prevResult = generateRoster(prevYear, prevMonth, conditions, members, { skipCrossMonthHistory: true });
+    const prevWeekendDays = prevResult.days.filter(d => d.dayOfWeek === 6 || d.dayOfWeek === 0);
+    if (prevWeekendDays.length === 0) return new Set();
+
+    const prevAnchor = d => d.dayOfWeek === 6 ? d.date : d.date - 1;
+    const lastAnchor = Math.max(...prevWeekendDays.map(prevAnchor));
+    const lastWeekendDays = prevWeekendDays.filter(d => prevAnchor(d) === lastAnchor);
+    const workers = new Set();
+
+    members.forEach(member => {
+      if (lastWeekendDays.some(d => isWeekendShift(prevResult.roster?.[member.id]?.[d.date]))) {
+        workers.add(member.id);
+      }
+    });
+
+    return workers;
+  }
+
+  const previousMonthLastWeekendWorkers = derivePreviousMonthLastWeekendWorkers();
+
+  function applySeededRosterForCurrentMonth(sourceRoster) {
+    const seededRoster = getSeedRosterForMonth(year, month);
+    if (!seededRoster) return;
+
+    const seedStartDay = year === ROSTER_START.year && month === ROSTER_START.month
+      ? (ROSTER_START.day || 1)
+      : 1;
+
+    members.forEach(member => {
+      days.forEach(d => {
+        const seededShift = seededRoster?.[member.id]?.[d.date];
+        if (d.date >= seedStartDay && seededShift) {
+          sourceRoster[member.id][d.date] = seededShift;
+        }
       });
     });
-
-    return { ws1: ws1.slice(0, 3), ws2: ws2.slice(0, 3) };
   }
 
-  // For each weekend day, alternate which half of the eligible pool works it,
-  // so members rotate on/off weekends while every Sat/Sun still gets covered
-  // by whichever half is active. wnIdx parity decides the active half.
-  weekendDays.forEach(d => {
-    const wn = getWeekNum(d.date);
-    const isWorkingHalf = wn % 2 === 0;
-    const groupA = sortedEligible.filter((_, i) => i % 2 === 0);
-    const groupB = sortedEligible.filter((_, i) => i % 2 === 1);
-    const activePool = isWorkingHalf ? groupA : groupB;
-    const restingPool = isWorkingHalf ? groupB : groupA;
+  // Shift rotation changes only once every 2 full calendar weeks and only on Mondays.
+  // Roster starts from the seeded July 13, 2026 production schedule.
+  // Bi-weekly rotation continues from July, so August inherits the active block from late July.
+  function getBiWeekBlockByMonthWeek(date) {
+    const currentDate = new Date(year, month - 1, date);
+    const rosterStartDate = new Date(ROSTER_START.year, ROSTER_START.month - 1, ROSTER_START.day || 1);
+    const firstRotationMonday = firstMondayOnOrAfter(rosterStartDate);
 
-    // From the active pool (≈12 people), pick 6 for this specific day (3+3).
-    // Use date parity to vary which 6 of the ~12 are picked across Sat vs Sun
-    // within the same weekend, so the same 6 aren't always on duty.
-    const dayParity = d.dayOfWeek === 6 ? 0 : 1;
-    const dayPool = activePool.filter((_, i) => i % 2 === dayParity);
-    // If the half-pool is too small to give 6, fall back to the full active pool
-    const finalPool = dayPool.length >= 6 ? dayPool : activePool;
+    if (currentDate < firstRotationMonday) return 0;
 
-    const { ws1, ws2 } = buildWS1WS2(finalPool);
+    const currentWeekMonday = startOfWeekMonday(currentDate);
+    const weeksSinceFirstRotationMonday = Math.floor(
+      (currentWeekMonday - firstRotationMonday) / (7 * 24 * 60 * 60 * 1000)
+    );
 
-    ws1.forEach(m => { weAssignments[m.id][d.date] = "WS1"; weCount[m.id]++; });
-    ws2.forEach(m => { weAssignments[m.id][d.date] = "WS2"; weCount[m.id]++; });
-
-    // Everyone else (both the resting pool and any unused members of the active pool) → OFF
-    eligibleForWE.forEach(m => {
-      if (weAssignments[m.id][d.date] === undefined) {
-        weAssignments[m.id][d.date] = "OFF";
-      }
-    });
-  });
-
-  // Post-pass: guarantee every eligible member has ≥2 weekend shifts per month
-  eligibleForWE.forEach(m => {
-    if (weCount[m.id] >= 2) return;
-    weekendDays.forEach(d => {
-      if (weCount[m.id] >= 2) return;
-      if (weAssignments[m.id][d.date] === "OFF") {
-        weAssignments[m.id][d.date] = "WS1";
-        weCount[m.id]++;
-      }
-    });
-  });
-
-  // ── Paired shift assignment ─────────────────────────────────────────────
-  // These pairs must ALWAYS land on the same weekday S1/S2 shift as each
-  // other, every month, no exceptions. The first id in each pair is the
-  // "anchor" — its own id-parity + swapShift flag determines the pair's
-  // shift as before. The second id (the "follower") is forced to match the
-  // anchor's shift exactly, overriding whatever its own id parity/swapShift
-  // would otherwise produce. This is more robust than tuning swapShift
-  // flags to coincidentally line up (which is fragile — see the Aishwarya/
-  // Kiruthika Shree case, which needed exactly one of the two flagged).
-  const SHIFT_PAIRS = [
-    [9, 12],   // Sathish            <-> Gokul (Data Engineer)
-    [11, 26],  // Shivani            <-> Mallela Rajyalakshmi
-    [30, 31],  // Kiruthika Shree B  <-> Aishwarya H
-  ];
-  const followerAnchor = {}; // followerId -> anchorId
-  SHIFT_PAIRS.forEach(([anchorId, followerId]) => { followerAnchor[followerId] = anchorId; });
-
-  function computeBaseIsS1(member) {
-    // even ID = starts S1, odd = starts S2; swapShift flag inverts this for a specific member
-    return member.swapShift ? (member.id % 2 !== 0) : (member.id % 2 === 0);
+    return Math.floor(weeksSinceFirstRotationMonday / 2) % 2;
   }
-  const baseIsS1ById = {};
-  members.forEach(m => { baseIsS1ById[m.id] = computeBaseIsS1(m); });
-  // Force each follower to match its anchor's shift, regardless of the follower's own parity
-  Object.entries(followerAnchor).forEach(([followerId, anchorId]) => {
-    if (baseIsS1ById[anchorId] !== undefined) baseIsS1ById[+followerId] = baseIsS1ById[anchorId];
-  });
+
+  function weekdayShiftFor(member, date) {
+    if (combo1Ids.has(member.id)) {
+      return getBiWeekBlockByMonthWeek(date) === 0 ? "S1" : "S2";
+    }
+    if (combo2Ids.has(member.id)) {
+      return getBiWeekBlockByMonthWeek(date) === 0 ? "S2" : "S1";
+    }
+    return "S1";
+  }
+
+  function isWeekendShift(shift) {
+    return shift === "WS1" || shift === "WS2";
+  }
+
+  function designationGroup(member) {
+    const d = member.designation || designationForMember(member);
+    if (d === "PAT") return "PAT";
+    if (d === "A" || d === "PA") return "A_PA";
+    return "OTHER";
+  }
+
+  function hasRequiredDesignationMix(workers) {
+    if (workers.length < 2) return false;
+    // The business rule is to avoid all-PAT weekend shifts.
+    // A/PA + PAT is preferred, but A + PA is also valid when PAT availability is constrained.
+    return !workers.every(w => designationGroup(w) === "PAT");
+  }
+
+  function shiftStartEnd(shift, date) {
+    if (!shift || shift === "OFF") return null;
+    const cfg = {
+      S1: conditions?.weekdayShift1 || { istStart: "06:00", istEnd: "15:00" },
+      S2: conditions?.weekdayShift2 || { istStart: "14:00", istEnd: "23:00" },
+      GEN: { istStart: "09:00", istEnd: "18:00" },
+      "G-PST": { istStart: "21:00", istEnd: "06:00" },
+      WS1: conditions?.weekendShift1 || { istStart: "06:00", istEnd: "15:00" },
+      WS2: conditions?.weekendShift2 || { istStart: "14:00", istEnd: "23:00" },
+    }[shift];
+    if (!cfg) return null;
+    const [sh, sm] = cfg.istStart.split(":").map(Number);
+    const [eh, em] = cfg.istEnd.split(":").map(Number);
+    const start = new Date(year, month - 1, date, sh, sm, 0, 0);
+    const end = new Date(year, month - 1, date, eh, em, 0, 0);
+    if (end <= start) end.setDate(end.getDate() + 1);
+    return { start, end };
+  }
+
+  function hasMinimumRest(memberId, date, shift, sourceRoster) {
+    if (!shift || shift === "OFF") return true;
+    const current = shiftStartEnd(shift, date);
+    if (!current) return true;
+    for (let d = date - 1; d >= 1; d--) {
+      const prevShift = sourceRoster?.[memberId]?.[d];
+      if (!prevShift || prevShift === "OFF") continue;
+      const prev = shiftStartEnd(prevShift, d);
+      if (!prev) return true;
+      return (current.start - prev.end) / (1000 * 60 * 60) >= 11;
+    }
+    return true;
+  }
+
+  function hasMinimumFutureRest(memberId, date, shift, sourceRoster) {
+    if (!shift || shift === "OFF") return true;
+    const current = shiftStartEnd(shift, date);
+    if (!current) return true;
+    for (let d = date + 1; d <= daysInMonth; d++) {
+      const nextShift = sourceRoster?.[memberId]?.[d];
+      if (!nextShift || nextShift === "OFF") continue;
+      const next = shiftStartEnd(nextShift, d);
+      if (!next) return true;
+      return (next.start - current.end) / (1000 * 60 * 60) >= 11;
+    }
+    return true;
+  }
+
+  function hasWeekendWorkInAnchor(memberId, anchor, sourceRoster) {
+    return getWeekendDays(anchor).some(d => isWeekendShift(sourceRoster?.[memberId]?.[d.date]));
+  }
+
+  function canReceiveWeekend(member, date, shift, sourceRoster) {
+    if (!isWeekendEligible(member)) return false;
+    if (sourceRoster?.[member.id]?.[date] !== "OFF") return false;
+    if (!isWeekendShift(shift)) return false;
+    if ((weekendWorkCount?.[member.id] || 0) >= weekendMaxTarget) return false;
+
+    const anchor = getWeekendAnchor(date);
+    const anchors = getWeekendAnchors();
+    const idx = anchors.indexOf(anchor);
+
+    // Cross-month weekend history: anyone who worked the previous month's last weekend
+    // is blocked from the first weekend of this month.
+    if (idx === 0 && previousMonthLastWeekendWorkers.has(member.id)) return false;
+    const currentWeekendDays = getWeekendDays(anchor);
+
+    // Never work Saturday and Sunday in the same weekend.
+    if (currentWeekendDays.some(d => d.date !== date && isWeekendShift(sourceRoster?.[member.id]?.[d.date]))) {
+      return false;
+    }
+
+    // No consecutive weekend duty when mathematically possible.
+    const prevAnchor = idx > 0 ? anchors[idx - 1] : null;
+    const nextAnchor = idx >= 0 && idx < anchors.length - 1 ? anchors[idx + 1] : null;
+    if (prevAnchor !== null && hasWeekendWorkInAnchor(member.id, prevAnchor, sourceRoster)) return false;
+    if (nextAnchor !== null && hasWeekendWorkInAnchor(member.id, nextAnchor, sourceRoster)) return false;
+
+    // Rest must be valid both from the previous worked shift and into the next worked shift.
+    return (
+      hasMinimumRest(member.id, date, shift, sourceRoster) &&
+      hasMinimumFutureRest(member.id, date, shift, sourceRoster)
+    );
+  }
 
   const roster = {};
-
   members.forEach(member => {
     roster[member.id] = {};
-    // baseIsS1 drives weekday S1/S2 rotation — looked up from baseIsS1ById so
-    // paired members (see SHIFT_PAIRS above) always come out identical.
-    const baseIsS1 = baseIsS1ById[member.id];
-
-    // ── Onsite: Mon–Fri G-PST, Sat+Sun OFF ─────────────────────────────
-    if (member.location === "Onsite") {
-      days.forEach(d => {
-        roster[member.id][d.date] = (d.dayOfWeek === 0 || d.dayOfWeek === 6) ? "OFF" : "G-PST";
-      });
-      return;
-    }
-
-    // ── Fixed GEN (Mukilan): Mon–Fri GEN, Sat+Sun OFF ──────────────────
-    if (member.fixedShift === "GEN") {
-      days.forEach(d => {
-        roster[member.id][d.date] = (d.dayOfWeek === 0 || d.dayOfWeek === 6) ? "OFF" : "GEN";
-      });
-      return;
-    }
-
-    // ── Leads & Managers: Sat+Sun always OFF, Mon–Fri bi-weekly rotation ─
-    if (member.isLead || member.isManager) {
-      days.forEach(d => {
-        const dow = d.dayOfWeek;
-        // Sat and Sun are always OFF for leads — no rotationEve override needed
-        // (leads never do weekend shifts, so no pre-rotation buffer is required)
-        roster[member.id][d.date] = (dow === 0 || dow === 6) ? "OFF" : wdShift(d.date, baseIsS1);
-      });
-
-      let offCount = days.filter(d => roster[member.id][d.date] === "OFF").length;
-
-      if (offCount < LEAD_MIN_OFF) {
-        const need = LEAD_MIN_OFF - offCount;
-        const candidates = days
-          .filter(d => ![0,6].includes(d.dayOfWeek) && roster[member.id][d.date] !== "OFF")
-          .sort((a, b) => {
-            const pref = [5,4,3,2,1];
-            return pref.indexOf(a.dayOfWeek) - pref.indexOf(b.dayOfWeek);
-          });
-        const usedWeeks = new Set();
-        let added = 0;
-        for (const d of candidates) {
-          if (added >= need) break;
-          const wk = getWeekNum(d.date);
-          if (!usedWeeks.has(wk)) { roster[member.id][d.date] = "OFF"; usedWeeks.add(wk); added++; }
-        }
-        for (const d of candidates) {
-          if (added >= need) break;
-          if (roster[member.id][d.date] !== "OFF") { roster[member.id][d.date] = "OFF"; added++; }
-        }
-      }
-
-      if (offCount > LEAD_MIN_OFF) {
-        const excess = offCount - LEAD_MIN_OFF;
-        let removed = 0;
-        for (const d of [...days].reverse()) {
-          if (removed >= excess) break;
-          if (![0,6].includes(d.dayOfWeek) && roster[member.id][d.date] === "OFF") {
-            roster[member.id][d.date] = wdShift(d.date, baseIsS1);
-            removed++;
-          }
-        }
-        // If still over target (no weekday OFFs left to restore — e.g. a 5-weekend
-        // month where natural weekend OFFs alone exceed MIN_OFF), this is expected:
-        // LEAD_MIN_OFF already accounts for the natural weekend floor, so this
-        // branch should rarely trigger. No further action needed.
-      }
-      return;
-    }
-
-    // ── Regular offshore team members ──────────────────────────────────────
-    // Weekdays: bi-weekly S1/S2 rotation anchored to first Monday.
-    // Weekends: use pre-computed weAssignments for balanced WS1/WS2 coverage.
-    // Off-day target matches LEAD_MIN_OFF so EVERYONE (leads, managers, team
-    // members) lands on the same off/working day count for the month —
-    // including 5-weekend months where the natural floor is higher than 8.
-
     days.forEach(d => {
       const dow = d.dayOfWeek;
-      if (dow === 6 || dow === 0) {
-        // Use pre-computed weekend assignment
-        roster[member.id][d.date] = weAssignments[member.id]?.[d.date] ?? "OFF";
+      if (seniorManagerIds.has(member.id)) {
+        roster[member.id][d.date] = d.isWeekend ? "OFF" : "GEN";
+      } else if (onsiteManagerIds.has(member.id)) {
+        roster[member.id][d.date] = d.isWeekend ? "OFF" : "G-PST";
+      } else if (offshoreGenIds.has(member.id)) {
+        roster[member.id][d.date] = d.isWeekend ? "OFF" : "GEN";
+      } else if (dow === 6 || dow === 0) {
+        roster[member.id][d.date] = "OFF";
       } else {
-        roster[member.id][d.date] = wdShift(d.date, baseIsS1);
+        roster[member.id][d.date] = weekdayShiftFor(member, d.date);
+      }
+    });
+  });
+
+  // =====================================================
+  // WEEKEND COVERAGE PLANNER
+  // =====================================================
+  const eligible = WEEKEND_ELIGIBLE_IDS.map(memberById).filter(Boolean).filter(isWeekendEligible);
+  const weekendWorkCount = Object.fromEntries(eligible.map(m => [m.id, 0]));
+  const weekendNightCount = Object.fromEntries(eligible.map(m => [m.id, 0]));
+  const totalWeekendSlots = weekendDays.length * (WEEKEND_AUTO_STAFFING.WS1 + WEEKEND_AUTO_STAFFING.WS2);
+  const totalWeekendCapacity = weekendDays.length * (WEEKEND_MAX_STAFFING.WS1 + WEEKEND_MAX_STAFFING.WS2);
+  const weekendMinTarget = Math.floor(totalWeekendSlots / Math.max(eligible.length, 1));
+  const weekendMaxTarget = Math.max(Math.ceil(totalWeekendSlots / Math.max(eligible.length, 1)), 2);
+  const weekendFairMinTarget = Math.max(
+    weekendMinTarget,
+    Math.min(2, weekendMaxTarget, Math.floor(totalWeekendCapacity / Math.max(eligible.length, 1)))
+  );
+
+  function markWeekendPattern(memberId, date) {
+    const day = days.find(d => d.date === date);
+    if (!day) return;
+    if (day.dayOfWeek === 6) {
+      // Saturday duty => Sun/Mon OFF.
+      if (date + 1 <= daysInMonth) roster[memberId][date + 1] = "OFF";
+      if (date + 2 <= daysInMonth) roster[memberId][date + 2] = "OFF";
+    } else if (day.dayOfWeek === 0) {
+      // Sunday duty => Fri/Sat OFF.
+      if (date - 2 >= 1) roster[memberId][date - 2] = "OFF";
+      if (date - 1 >= 1) roster[memberId][date - 1] = "OFF";
+    }
+  }
+
+  function sortWeekendCandidates(candidates, date, shift) {
+    return [...candidates].sort((a, b) => {
+      const aCnt = weekendWorkCount[a.id] || 0;
+      const bCnt = weekendWorkCount[b.id] || 0;
+      if (aCnt !== bCnt) return aCnt - bCnt;
+      const aNight = weekendNightCount[a.id] || 0;
+      const bNight = weekendNightCount[b.id] || 0;
+      if (shift === "WS2" && aNight !== bNight) return aNight - bNight;
+      const aSen = a.isSenior ? 0 : 1;
+      const bSen = b.isSenior ? 0 : 1;
+      if (aSen !== bSen) return aSen - bSen;
+      return a.id - b.id;
+    });
+  }
+
+  function assignWeekendSlot(day, shift, allowConsecutiveFallback = false, requiredDesignationGroup = null) {
+    const baseCandidates = eligible.filter(m => canReceiveWeekend(m, day.date, shift, roster));
+    const strictCandidates = requiredDesignationGroup
+      ? baseCandidates.filter(m => designationGroup(m) === requiredDesignationGroup)
+      : baseCandidates;
+    // For PAT-preferred slot, fall back to any eligible non-conflicting resource if PAT is unavailable.
+    // The validation still prevents an all-PAT shift.
+    let candidates = strictCandidates.length > 0 || requiredDesignationGroup !== "PAT"
+      ? strictCandidates
+      : baseCandidates;
+
+    if (candidates.length === 0 && allowConsecutiveFallback) {
+      // Fallback keeps fixed-person exclusions and same-weekend protection, but permits the single
+      // unavoidable consecutive-weekend overlap when the eligible pool is smaller than required capacity.
+      const anchor = getWeekendAnchor(day.date);
+      candidates = eligible.filter(m => {
+        if (roster[m.id]?.[day.date] !== "OFF") return false;
+        const sameWeekendConflict = getWeekendDays(anchor).some(d => d.date !== day.date && isWeekendShift(roster[m.id]?.[d.date]));
+        if (sameWeekendConflict) return false;
+        return hasMinimumRest(m.id, day.date, shift, roster);
+      });
+    }
+
+    const chosen = sortWeekendCandidates(candidates, day.date, shift)[0];
+    if (!chosen) return false;
+
+    markWeekendPattern(chosen.id, day.date);
+    roster[chosen.id][day.date] = shift;
+    weekendWorkCount[chosen.id] = (weekendWorkCount[chosen.id] || 0) + 1;
+    if (shift === "WS2") weekendNightCount[chosen.id] = (weekendNightCount[chosen.id] || 0) + 1;
+    return true;
+  }
+
+  weekendDays.forEach(day => {
+    WEEKEND_SLOT_SEQUENCE.forEach(slot => {
+      const shiftSpec = typeof slot === "string" ? { shift: slot, requiredGroup: null } : slot;
+      assignWeekendSlot(day, shiftSpec.shift, false, shiftSpec.requiredGroup);
+    });
+  });
+
+  // =====================================================
+  // WEEKEND FAIRNESS TOP-UP
+  // Runs after mandatory weekend coverage and before fixed-rule re-apply/monthly normalization.
+  // It does not move existing logic or assignments; it only adds WS1/WS2 up to max staffing
+  // so eligible members do not remain with only 1 weekend shift when 2 is possible.
+  // =====================================================
+  function weekendStaffCount(date, shift) {
+    return members.filter(m => roster[m.id]?.[date] === shift).length;
+  }
+
+  function canAddWeekendTopUp(member, date, shift) {
+    if (!isWeekendEligible(member)) return false;
+    if (roster[member.id]?.[date] !== "OFF") return false;
+    if ((weekendWorkCount[member.id] || 0) >= weekendMaxTarget) return false;
+    if (weekendStaffCount(date, shift) >= WEEKEND_MAX_STAFFING[shift]) return false;
+    const anchor = getWeekendAnchor(date);
+    const anchors = getWeekendAnchors();
+    const idx = anchors.indexOf(anchor);
+    if (idx === 0 && previousMonthLastWeekendWorkers.has(member.id)) return false;
+    if (getWeekendDays(anchor).some(d => d.date !== date && isWeekendShift(roster[member.id]?.[d.date]))) return false;
+    return hasMinimumRest(member.id, date, shift, roster) && hasMinimumFutureRest(member.id, date, shift, roster);
+  }
+
+  function addWeekendTopUp(member) {
+    const slots = [];
+    weekendDays.forEach(day => {
+      ["WS1", "WS2"].forEach(shift => {
+        if (canAddWeekendTopUp(member, day.date, shift)) {
+          slots.push({ date: day.date, shift, staff: weekendStaffCount(day.date, shift) });
+        }
+      });
+    });
+    slots.sort((a, b) => {
+      if (a.staff !== b.staff) return a.staff - b.staff;
+      if ((weekendNightCount[member.id] || 0) > 0 && a.shift !== b.shift) return a.shift === "WS1" ? -1 : 1;
+      if (a.date !== b.date) return a.date - b.date;
+      return a.shift.localeCompare(b.shift);
+    });
+    const chosen = slots[0];
+    if (!chosen) return false;
+    markWeekendPattern(member.id, chosen.date);
+    roster[member.id][chosen.date] = chosen.shift;
+    weekendWorkCount[member.id] = (weekendWorkCount[member.id] || 0) + 1;
+    if (chosen.shift === "WS2") weekendNightCount[member.id] = (weekendNightCount[member.id] || 0) + 1;
+    return true;
+  }
+
+  for (let pass = 0; pass < 10; pass++) {
+    const underServed = eligible
+      .filter(m => (weekendWorkCount[m.id] || 0) < weekendFairMinTarget)
+      .sort((a, b) => {
+        const aCnt = weekendWorkCount[a.id] || 0;
+        const bCnt = weekendWorkCount[b.id] || 0;
+        if (aCnt !== bCnt) return aCnt - bCnt;
+        return a.id - b.id;
+      });
+    if (underServed.length === 0) break;
+    let changed = false;
+    underServed.forEach(member => {
+      while ((weekendWorkCount[member.id] || 0) < weekendFairMinTarget) {
+        if (!addWeekendTopUp(member)) break;
+        changed = true;
+      }
+    });
+    if (!changed) break;
+  }
+
+  // Re-apply fixed and never-weekend rules after weekend pattern changes.
+  members.forEach(member => {
+    days.forEach(d => {
+      if (seniorManagerIds.has(member.id)) roster[member.id][d.date] = d.isWeekend ? "OFF" : "GEN";
+      if (onsiteManagerIds.has(member.id)) roster[member.id][d.date] = d.isWeekend ? "OFF" : "G-PST";
+      if (offshoreGenIds.has(member.id)) roster[member.id][d.date] = d.isWeekend ? "OFF" : "GEN";
+      if ((leadIds.has(member.id) || weekendExemptIds.has(member.id)) && d.isWeekend) roster[member.id][d.date] = "OFF";
+    });
+  });
+
+  // =====================================================
+  // MONTHLY COUNT NORMALIZER
+  // Only S1/S2 weekdays are changed. Fixed GEN/G-PST and WS1/WS2 are protected.
+  // =====================================================
+  function getOffDays(memberId) {
+    return days.filter(d => roster[memberId]?.[d.date] === "OFF").length;
+  }
+
+  function getWorkDays(memberId) {
+    return daysInMonth - getOffDays(memberId);
+  }
+
+  function hasAtLeast2OffInEveryRolling7(memberId) {
+    if (daysInMonth < 7) return true;
+    for (let start = 1; start <= daysInMonth - 6; start++) {
+      const offCnt = days
+        .filter(d => d.date >= start && d.date <= start + 6)
+        .filter(d => roster[memberId]?.[d.date] === "OFF").length;
+      if (offCnt < 2) return false;
+    }
+    return true;
+  }
+
+  function wouldKeepRollingRest(memberId, date, newShift) {
+    const old = roster[memberId]?.[date];
+    roster[memberId][date] = newShift;
+    const ok = hasAtLeast2OffInEveryRolling7(memberId) && hasMinimumRest(memberId, date, newShift, roster);
+    roster[memberId][date] = old;
+    return ok;
+  }
+
+  function isWorkingShiftForCount(memberId, date) {
+    const shift = roster[memberId]?.[date];
+    return shift && shift !== "OFF";
+  }
+
+  function getWorkStreak(memberId, date) {
+    if (!isWorkingShiftForCount(memberId, date)) return { start: date, end: date, length: 0 };
+    let start = date;
+    let end = date;
+    while (start > 1 && isWorkingShiftForCount(memberId, start - 1)) start--;
+    while (end < daysInMonth && isWorkingShiftForCount(memberId, end + 1)) end++;
+    return { start, end, length: end - start + 1 };
+  }
+
+  function findExtraWorkdayOffCandidate(member) {
+    const candidates = days
+      .filter(d => {
+        const shift = roster[member.id]?.[d.date];
+        return d.dayOfWeek >= 1 && d.dayOfWeek <= 5 && (shift === "S1" || shift === "S2");
+      })
+      .map(d => {
+        const streak = getWorkStreak(member.id, d.date);
+        const center = (streak.start + streak.end) / 2;
+        return { date: d.date, streakLength: streak.length, distanceFromCenter: Math.abs(d.date - center) };
+      });
+
+    const sixDayCandidates = candidates.filter(c => c.streakLength >= 6);
+    const pool = sixDayCandidates.length > 0 ? sixDayCandidates : candidates;
+    pool.sort((a, b) => {
+      if (b.streakLength !== a.streakLength) return b.streakLength - a.streakLength;
+      if (a.distanceFromCenter !== b.distanceFromCenter) return a.distanceFromCenter - b.distanceFromCenter;
+      return b.date - a.date;
+    });
+    return pool[0]?.date || null;
+  }
+
+  function normalizeMonthlyCount(member) {
+    // FINAL HARD RULE: every resource must have exactly TARGET_WORK_DAYS for the month.
+    // Fixed/never-weekend resources naturally match Mon-Fri workdays; weekend-eligible
+    // resources are repaired only by changing weekday S1/S2 cells, never GEN/G-PST/WS1/WS2.
+    if (isHardFixed(member) || leadIds.has(member.id) || weekendExemptIds.has(member.id)) {
+      return;
+    }
+
+    let workCount = getWorkDays(member.id);
+
+    while (workCount > TARGET_WORK_DAYS) {
+      const candidateDate = findExtraWorkdayOffCandidate(member);
+      if (!candidateDate) break;
+      roster[member.id][candidateDate] = "OFF";
+      workCount--;
+    }
+
+    while (workCount < TARGET_WORK_DAYS) {
+      const candidate = [...days].reverse().find(d => {
+        if (d.dayOfWeek < 1 || d.dayOfWeek > 5) return false;
+        if (roster[member.id]?.[d.date] !== "OFF") return false;
+        const natural = weekdayShiftFor(member, d.date);
+        if (natural !== "S1" && natural !== "S2") return false;
+        return wouldKeepRollingRest(member.id, d.date, natural);
+      });
+      if (!candidate) break;
+      roster[member.id][candidate.date] = weekdayShiftFor(member, candidate.date);
+      workCount++;
+    }
+  }
+
+  members.forEach(normalizeMonthlyCount);
+
+  // Final equality pass: if a month-start/month-end weekend compensation still leaves
+  // someone off-target, repair only S1/S2 weekdays until exact monthly count is met.
+  for (let pass = 0; pass < 5; pass++) {
+    let changed = false;
+    members.forEach(member => {
+      if (isHardFixed(member) || leadIds.has(member.id) || weekendExemptIds.has(member.id)) return;
+      let workCount = getWorkDays(member.id);
+      while (workCount > TARGET_WORK_DAYS) {
+        const candidateDate = findExtraWorkdayOffCandidate(member);
+        if (!candidateDate) break;
+        roster[member.id][candidateDate] = "OFF";
+        workCount--;
+        changed = true;
+      }
+      while (workCount < TARGET_WORK_DAYS) {
+        const candidate = [...days].reverse().find(d => {
+          if (d.dayOfWeek < 1 || d.dayOfWeek > 5) return false;
+          if (roster[member.id]?.[d.date] !== "OFF") return false;
+          const natural = weekdayShiftFor(member, d.date);
+          if (natural !== "S1" && natural !== "S2") return false;
+          return hasMinimumRest(member.id, d.date, natural, roster);
+        });
+        if (!candidate) break;
+        roster[member.id][candidate.date] = weekdayShiftFor(member, candidate.date);
+        workCount++;
+        changed = true;
+      }
+    });
+    if (!changed) break;
+  }
+
+  // Apply supplied production seed at the end so July 13-31 exactly matches the attached manual roster.
+  // Future months still use the seed only as history and continue to generate normally.
+  applySeededRosterForCurrentMonth(roster);
+
+  // =====================================================
+  // FINAL VALIDATION REPORT - logs only, never throws/crashes UI
+  // =====================================================
+  function collectValidationIssues() {
+    const issues = [];
+
+    members.forEach(member => {
+      if (offshoreGenIds.has(member.id)) {
+        days.forEach(d => {
+          const shift = roster[member.id]?.[d.date];
+          if ((!d.isWeekend && shift !== "GEN") || (d.isWeekend && shift !== "OFF")) {
+            issues.push(`ID ${member.id} must be GEN weekdays and OFF weekends, found ${shift} on day ${d.date}`);
+          }
+        });
+      }
+
+      if (weekendExemptIds.has(member.id) || leadIds.has(member.id)) {
+        weekendDays.forEach(d => {
+          if (roster[member.id]?.[d.date] !== "OFF") {
+            issues.push(`${member.name} must be OFF on weekend day ${d.date}`);
+          }
+        });
+      }
+
+      const anchors = getWeekendAnchors();
+      anchors.forEach((anchor, idx) => {
+        const worked = getWeekendDays(anchor).filter(d => isWeekendShift(roster[member.id]?.[d.date]));
+        if (worked.length > 1) {
+          issues.push(`${member.name} works both days in weekend anchored ${anchor}`);
+        }
+        if (worked.length === 1 && idx > 0) {
+          const prevWorked = hasWeekendWorkInAnchor(member.id, anchors[idx - 1], roster);
+          if (prevWorked) issues.push(`${member.name} has consecutive weekend duty on weekend anchored ${anchor}`);
+        }
+      });
+
+    });
+
+    members.forEach(member => {
+      const count = getWorkDays(member.id);
+      if (count !== TARGET_WORK_DAYS) {
+        issues.push(`${member.name} monthly working-day count mismatch: ${count}, expected exactly ${TARGET_WORK_DAYS}`);
       }
     });
 
-    // Enforce EXACTLY LEAD_MIN_OFF off days — top up if short, trim if over.
-    let offCount = days.filter(d => roster[member.id][d.date] === "OFF").length;
-
-    if (offCount < LEAD_MIN_OFF) {
-      const need = LEAD_MIN_OFF - offCount;
-      const usedWeeks = new Set();
-      let added = 0;
-      for (const pdow of [1, 5, 4, 2, 3]) {
-        for (const wn of weekNums) {
-          if (added >= need) break;
-          const day = days.find(d => getWeekNum(d.date) === wn && d.dayOfWeek === pdow);
-          if (day && roster[member.id][day.date] !== "OFF") {
-            roster[member.id][day.date] = "OFF";
-            usedWeeks.add(wn);
-            added++;
-          }
-        }
-        if (added >= need) break;
+    eligible.forEach(member => {
+      const count = weekendWorkCount[member.id] || 0;
+      if (count < weekendFairMinTarget || count > weekendMaxTarget) {
+        issues.push(`${member.name} weekend count out of fair range: ${count}, expected ${weekendFairMinTarget}-${weekendMaxTarget}`);
       }
-      for (const d of days) {
-        if (added >= need) break;
-        const dow = d.dayOfWeek;
-        if (dow !== 0 && dow !== 6 && roster[member.id][d.date] !== "OFF") {
-          roster[member.id][d.date] = "OFF";
-          added++;
-        }
-      }
-    }
+    });
 
-    if (offCount > LEAD_MIN_OFF) {
-      // Trim excess OFFs: restore weekday OFFs first (never touch WS1/WS2 or weekend OFFs,
-      // since those represent the fixed weekend-alternation pattern).
-      const excess = offCount - LEAD_MIN_OFF;
-      let removed = 0;
-      for (const d of [...days].reverse()) {
-        if (removed >= excess) break;
-        const dow = d.dayOfWeek;
-        if (dow !== 0 && dow !== 6 && roster[member.id][d.date] === "OFF") {
-          roster[member.id][d.date] = wdShift(d.date, baseIsS1);
-          removed++;
+    weekendDays.forEach(d => {
+      const ws1 = members.filter(m => roster[m.id]?.[d.date] === "WS1").length;
+      const ws2 = members.filter(m => roster[m.id]?.[d.date] === "WS2").length;
+      const ws1Invalid = ws1 < WEEKEND_MIN_STAFFING.WS1 || ws1 > WEEKEND_MAX_STAFFING.WS1;
+      const ws2Invalid = ws2 < WEEKEND_MIN_STAFFING.WS2 || ws2 > WEEKEND_MAX_STAFFING.WS2;
+      if (ws1Invalid || ws2Invalid) {
+        issues.push(`Weekend staffing mismatch on day ${d.date}: WS1=${ws1}, WS2=${ws2}, expected WS1=${WEEKEND_MIN_STAFFING.WS1}-${WEEKEND_MAX_STAFFING.WS1}, WS2=${WEEKEND_MIN_STAFFING.WS2}-${WEEKEND_MAX_STAFFING.WS2}`);
+      }
+      const ws1Workers = members.filter(m => roster[m.id]?.[d.date] === "WS1");
+      const ws2Workers = members.filter(m => roster[m.id]?.[d.date] === "WS2");
+      if (ws1Workers.length > 0 && !hasRequiredDesignationMix(ws1Workers)) {
+        issues.push(`WS1 designation mix violation on day ${d.date}: must not be staffed only with PAT resources`);
+      }
+      if (ws2Workers.length > 0 && !hasRequiredDesignationMix(ws2Workers)) {
+        issues.push(`WS2 designation mix violation on day ${d.date}: must not be staffed only with PAT resources`);
+      }
+    });
+
+    // Rest check across consecutive worked shifts.
+    members.forEach(member => {
+      for (let date = 2; date <= daysInMonth; date++) {
+        const shift = roster[member.id]?.[date];
+        if (shift && shift !== "OFF" && !hasMinimumRest(member.id, date, shift, roster)) {
+          issues.push(`${member.name} has less than 11h rest before day ${date} ${shift}`);
         }
       }
-    }
+    });
 
-  });
+    return issues;
+  }
+
+  const finalIssues = collectValidationIssues();
+  if (finalIssues.length > 0) {
+    console.warn(
+      `Roster generated with validation warnings. Some supplied constraints may be mathematically conflicting.\n${finalIssues.join("\n")}`
+    );
+  }
 
   return { roster, days };
 }
+
 
 function calcStats(roster, days, members) {
   const stats = {};
@@ -1190,7 +1700,8 @@ function LoginScreen({ teamMembers, onLogin }) {
   function handleKeyDown(e) { if (e.key === "Enter") handleLogin(); }
 
   return (
-    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter', system-ui, sans-serif", padding: "20px" }}>
+    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter', system-ui, sans-serif", padding: "20px", colorScheme: "light" }}>
+      <LightThemeGuard />
       <div style={{ background: "white", borderRadius: "16px", padding: "36px 40px", width: "420px", maxWidth: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.12)", border: "1px solid #e2e8f0" }}>
 
         {/* Logo */}
@@ -1313,14 +1824,17 @@ function LoginScreen({ teamMembers, onLogin }) {
 
 export default function App() {
   const [tab, setTab] = useState("roster");
-  const [year, setYear] = useState(2026);
-  const [month, setMonth] = useState(7);
+  const today = new Date();
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth() + 1);
   const [conditions, setConditions] = useState(DEFAULT_CONDITIONS);
   const [manualOverrides, setManualOverrides] = useState({});
+  const [savedRosterMonth, setSavedRosterMonth] = useState(null);
+  const [rosterSaveMsg, setRosterSaveMsg] = useState("");
   const [selectedCell, setSelectedCell] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [showExportMsg, setShowExportMsg] = useState(false);
-  const [teamMembers, setTeamMembers] = useState(INITIAL_TEAM);
+  const [teamMembers, setTeamMembers] = useState(applyPromptMemberClassification(INITIAL_TEAM));
   const [memberModal, setMemberModal] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [currentUser, setCurrentUser] = useState(null); // null = not logged in
@@ -1351,10 +1865,14 @@ export default function App() {
       try {
         const [members, savedConditions] = await Promise.all([loadTeamMembers(), loadConditions()]);
         if (cancelled) return;
-        if (members && members.length) setTeamMembers(members);
-        else await saveTeamMembers(INITIAL_TEAM); // first run: seed the backend
+        if (members && members.length) setTeamMembers(applyPromptMemberClassification(members));
+        else {
+			console.warn("[backend] No team members found in Supabase. Skipping INITIAL_TEAM auto-seed to avoid PIN reset.");
+		}; 
         if (savedConditions) setConditions(savedConditions);
-        else await saveConditions(DEFAULT_CONDITIONS); // first run: seed the backend
+        else {
+          console.warn("[backend] No conditions found. Using local DEFAULT_CONDITIONS without saving automatically.");
+        }; // first run: seed the backend
         setSyncStatus("synced");
       } catch (e) {
         console.error("[backend] initial load failed", e);
@@ -1367,20 +1885,25 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load per-month overrides + adhoc log whenever the selected month changes
+  // Load per-month overrides + adhoc log + saved finalized roster whenever the selected month changes
   useEffect(() => {
     if (!isBackendConfigured() || !hydrated) return;
     const key = `${year}-${month}`;
     let cancelled = false;
     (async () => {
       try {
-        const { overrides, adhocList: list } = await loadMonthData(year, month);
+        const [{ overrides, adhocList: list }, storedRoster] = await Promise.all([
+          loadMonthData(year, month),
+          loadRosterMonth(year, month),
+        ]);
         if (cancelled) return;
         monthLoadedRef.current = key; // mark before setState so save-effects below don't fire on stale data
-        setManualOverrides(overrides);
-        setAdhocList(list);
+        setManualOverrides(overrides || {});
+        setAdhocList(list || []);
+        setSavedRosterMonth(storedRoster || null);
       } catch (e) {
         console.error("[backend] month load failed", e);
+        if (!cancelled) setSavedRosterMonth(null);
       }
     })();
     return () => { cancelled = true; };
@@ -1419,18 +1942,56 @@ export default function App() {
   const [teamFilters,   setTeamFilters]   = useState({ name: [], tech: [], role: [], location: [] });
   const [auditFilters,  setAuditFilters]  = useState({ name: [], tech: [], role: [], location: [] });
   const [auditExtra,    setAuditExtra]    = useState({ status: [] });
+  const [singleDate,    setSingleDate]    = useState(""); // "YYYY-MM-DD" — when set, Calendar Roster shows only this one date's column
 
   const monthName = new Date(year, month - 1, 1).toLocaleString("default", { month: "long" });
   const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const SHIFTS_LIST = ["S1","S2","GEN","G-PST","WS1","WS2","OFF"];
 
-  const { roster: baseRoster, days } = useMemo(() => generateRoster(year, month, conditions, teamMembers), [year, month, conditions, teamMembers]);
+  const generatedResult = useMemo(
+    () => generateRoster(year, month, conditions, teamMembers),
+    [year, month, conditions, teamMembers]
+  );
+  const days = generatedResult.days;
+  const baseRoster = useMemo(() => {
+    return savedRosterMonth || generatedResult.roster;
+  }, [savedRosterMonth, generatedResult]);
+
   const roster = useMemo(() => {
     const r = {};
-    teamMembers.forEach(m => { r[m.id] = { ...baseRoster[m.id], ...(manualOverrides[m.id] || {}) }; });
+    teamMembers.forEach(m => { r[m.id] = { ...(baseRoster[m.id] || {}), ...(manualOverrides[m.id] || {}) }; });
     return r;
   }, [baseRoster, manualOverrides, teamMembers]);
+  // When a month has been explicitly saved, keep the final visible roster in roster_months
+  // in sync with any manual override changes.
+  useEffect(() => {
+    if (!isBackendConfigured() || !hydrated) return;
+    if (monthLoadedRef.current !== `${year}-${month}`) return;
+    if (!savedRosterMonth) return;
+
+    const timer = setTimeout(() => {
+      saveRosterMonth(
+        year,
+        month,
+        roster,
+        "override-applied",
+        currentUser?.name || "system"
+      ).catch(e => console.error("[backend] autosave roster_months failed", e));
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [manualOverrides, roster, year, month, hydrated, savedRosterMonth, currentUser]);
+
   const stats = useMemo(() => calcStats(roster, days, teamMembers), [roster, days, teamMembers]);
+  const targetWorkDays = days.length - days.filter(d => d.isWeekend).length;
+
+  const padM = String(month).padStart(2, "0");
+  const daysInMonthCount = new Date(year, month, 0).getDate();
+  // If singleDate falls within the currently selected month/year, show only that
+  // one date's column in Calendar Roster. Otherwise (e.g. stale selection after
+  // switching month) fall back to showing the whole month.
+  const singleDateDay = singleDate && singleDate.startsWith(`${year}-${padM}-`) ? +singleDate.slice(-2) : null;
+  const visibleDays = singleDateDay ? days.filter(d => d.date === singleDateDay) : days;
 
   const uniqueNames  = ["All", ...teamMembers.map(m => m.name)];
   const uniqueTechs  = ["All", ...Array.from(new Set(teamMembers.map(m => m.tech)))];
@@ -1461,19 +2022,36 @@ export default function App() {
   }
 
   const filteredRoster = useMemo(() => {
-    let members = applyBase(rosterFilters, teamMembers);
-    if (rosterExtra.shift && rosterExtra.shift.length > 0) {
-      members = members.filter(m => Object.values(roster[m.id] || {}).some(s => rosterExtra.shift.includes(s)));
-    }
-    return members;
-  }, [rosterFilters, rosterExtra, roster]);
+  let members = applyBase(rosterFilters, teamMembers);
+
+  if (rosterExtra.shift && rosterExtra.shift.length > 0) {
+
+    members = members.filter(member => {
+
+      // If a specific date is selected, filter using that day's shift only
+      if (singleDateDay) {
+        const shiftForSelectedDay =
+          roster[member.id]?.[singleDateDay] || "OFF";
+
+        return rosterExtra.shift.includes(shiftForSelectedDay);
+      }
+
+      // Otherwise retain existing behaviour (match anywhere in month)
+      return Object.values(roster[member.id] || {}).some(shift =>
+        rosterExtra.shift.includes(shift)
+      );
+    });
+  }
+
+  return members;
+}, [rosterFilters,rosterExtra,roster,teamMembers,singleDateDay]);
 
   const filteredTeam  = useMemo(() => applyBase(teamFilters, teamMembers), [teamFilters, teamMembers]);
   const filteredAudit = useMemo(() => {
     let members = applyBase(auditFilters, teamMembers);
     if (auditExtra.status && auditExtra.status.length > 0) {
       members = members.filter(m => {
-        const ok = stats[m.id].workDays >= conditions.minDaysPerMonth;
+        const ok = stats[m.id].workDays === targetWorkDays;
         return auditExtra.status.includes(ok ? "OK" : "Review");
       });
     }
@@ -1488,13 +2066,13 @@ export default function App() {
   function handleAddMember(form) {
     const newId = Math.max(...teamMembers.map(m => m.id)) + 1;
     const flags = deriveFlags(form.role);
-    setTeamMembers(prev => [...prev, { id: newId, ...form, ...flags }]);
+    setTeamMembers(prev => [...prev, { id: newId, ...form, designation: form.designation || "A", ...flags }]);
     setMemberModal(null);
   }
 
   function handleEditMember(form) {
     const flags = deriveFlags(form.role);
-    setTeamMembers(prev => prev.map(m => m.id === memberModal.member.id ? { ...m, ...form, ...flags } : m));
+    setTeamMembers(prev => prev.map(m => m.id === memberModal.member.id ? { ...m, ...form, designation: form.designation || m.designation || "A", ...flags } : m));
     setMemberModal(null);
   }
 
@@ -1510,18 +2088,113 @@ export default function App() {
     setSelectedCell(null);
   }
 
-  function handleExport() {
-    const rows = [["Name","Tech","Role","Location",...days.map(d=>`${month}/${d.date}`),"Total Days","Off Days"]];
-    filteredRoster.forEach(m => {
-      const shifts = days.map(d => roster[m.id]?.[d.date] || "OFF");
-      rows.push([m.name, m.tech, m.role, m.location, ...shifts, stats[m.id].workDays, stats[m.id].offDays]);
-    });
-    const csv = rows.map(r => r.join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `Alaska_Roster_${monthName}_${year}.csv`; a.click();
-    setShowExportMsg(true); setTimeout(() => setShowExportMsg(false), 2500);
+  async function handleSaveRosterSchedule(source = "generated") {
+    try {
+      if (!isBackendConfigured()) {
+        setRosterSaveMsg("Supabase is not configured.");
+        return;
+      }
+      await saveRosterMonth(year, month, roster, source, currentUser?.name || "system");
+      setSavedRosterMonth(roster);
+      setRosterSaveMsg(`✓ Saved ${monthName} ${year} roster schedule`);
+      setTimeout(() => setRosterSaveMsg(""), 3000);
+    } catch (e) {
+      console.error("[backend] save roster schedule failed", e);
+      setRosterSaveMsg("Failed to save roster schedule. Check roster_months table/policies.");
+    }
   }
+
+  async function handleRegenerateAndReplaceSavedRoster() {
+    try {
+      if (!isBackendConfigured()) {
+        setRosterSaveMsg("Supabase is not configured.");
+        return;
+      }
+      setGenerating(true);
+      await deleteRosterMonth(year, month);
+      const fresh = generateRoster(year, month, conditions, teamMembers);
+      await saveRosterMonth(year, month, fresh.roster, "regenerated", currentUser?.name || "system");
+      setSavedRosterMonth(fresh.roster);
+      setManualOverrides({});
+      setRosterSaveMsg(`✓ Regenerated and saved ${monthName} ${year}`);
+      setTimeout(() => setRosterSaveMsg(""), 3000);
+    } catch (e) {
+      console.error("[backend] regenerate roster schedule failed", e);
+      setRosterSaveMsg("Failed to regenerate roster schedule. Check roster_months table/policies.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  function handleExport() {
+  const data = [];
+
+  data.push([
+    "Name",
+    "Tech",
+    "Role",
+    ...days.map(d => `${month}/${d.date}`)
+  ]);
+
+  filteredRoster.forEach(member => {
+    data.push([
+      member.name,
+      member.tech,
+      member.role,
+      ...days.map(d => roster[member.id]?.[d.date] || "OFF")
+    ]);
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  
+  const EXCEL_SHIFT_COLORS = {
+  S1:  "DBEAFE",
+  S2:  "DCFCE7",
+  GEN: "EDE9FE",
+  "G-PST": "EDE9FE",
+  WS1: "FEF3C7",
+  WS2: "FEE2E2",
+  OFF: "F3F4F6"};
+  
+  for (let r = 1; r < data.length; r++) {
+
+    for (let c = 3; c < data[r].length; c++) {
+  
+      const cellRef =
+        XLSX.utils.encode_cell({ r, c });
+  
+      const shift = data[r][c];
+  
+      if (ws[cellRef] && EXCEL_SHIFT_COLORS[shift]) {
+  
+        ws[cellRef].s = {
+          fill: {
+            fgColor: {
+              rgb: EXCEL_SHIFT_COLORS[shift]
+            }
+          }
+        };
+      }
+    }
+  };
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Roster");
+
+  const excelBuffer = XLSX.write(wb, {
+    bookType: "xlsx",
+    type: "array"
+  });
+
+  const file = new Blob(
+    [excelBuffer],
+    {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    }
+  );
+
+  saveAs(file,`Alaska_Roster_${monthName}_${year}.xlsx`);}
+
 
 
 
@@ -1555,7 +2228,8 @@ export default function App() {
   }
 
   return (
-    <div style={{ fontFamily: "'Inter', system-ui, sans-serif", color: "#1e293b", padding: "0 0 2rem" }}>
+    <div style={{ fontFamily: "'Inter', system-ui, sans-serif", color: "#1e293b", padding: "0 0 2rem", background: "#ffffff", colorScheme: "light" }}>
+      <LightThemeGuard />
       <h2 style={{ position: "absolute", opacity: 0, pointerEvents: "none" }}>Alaska Support Roster</h2>
       {changePinOpen && <ChangePinModal user={currentUser} onSave={handleChangePin} onClose={() => setChangePinOpen(false)} />}
 
@@ -1603,17 +2277,29 @@ export default function App() {
               {[2025,2026,2027].map(y => <option key={y}>{y}</option>)}
             </select>
           </div>
-          {canEdit && <button onClick={() => { setGenerating(true); setTimeout(() => { setManualOverrides({}); setGenerating(false); }, 900); }}
-            disabled={generating}
-            style={{ background: generating ? "#93c5fd" : "#1d4ed8", color: "white", border: "none", padding: "7px 16px", borderRadius: "8px", fontSize: "12px", fontWeight: 600, cursor: generating ? "default" : "pointer", display: "flex", alignItems: "center", gap: "6px" }}>
-            <i className={`ti ${generating ? "ti-refresh" : "ti-sparkles"}`} style={{ fontSize: "13px" }} aria-hidden="true"></i>
-            {generating ? "Generating…" : "Generate roster"}
-          </button>}
+          {canEdit && <>
+            <button onClick={() => { setGenerating(true); setTimeout(() => { setSavedRosterMonth(null); setManualOverrides({}); setGenerating(false); }, 900); }}
+              disabled={generating}
+              style={{ background: generating ? "#93c5fd" : "#1d4ed8", color: "white", border: "none", padding: "7px 16px", borderRadius: "8px", fontSize: "12px", fontWeight: 600, cursor: generating ? "default" : "pointer", display: "flex", alignItems: "center", gap: "6px" }}>
+              <i className={`ti ${generating ? "ti-refresh" : "ti-sparkles"}`} style={{ fontSize: "13px" }} aria-hidden="true"></i>
+              {generating ? "Generating…" : "Preview Generate"}
+            </button>
+            <button onClick={() => handleSaveRosterSchedule(savedRosterMonth ? "updated" : "generated")}
+              style={{ background: "#15803d", color: "white", border: "none", padding: "7px 16px", borderRadius: "8px", fontSize: "12px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}>
+              <i className="ti ti-device-floppy" style={{ fontSize: "13px" }} aria-hidden="true"></i>Save roster
+            </button>
+            <button onClick={handleRegenerateAndReplaceSavedRoster}
+              disabled={generating}
+              style={{ background: "#f97316", color: "white", border: "none", padding: "7px 16px", borderRadius: "8px", fontSize: "12px", fontWeight: 600, cursor: generating ? "default" : "pointer", display: "flex", alignItems: "center", gap: "6px" }}>
+              <i className="ti ti-refresh" style={{ fontSize: "13px" }} aria-hidden="true"></i>Regenerate & save
+            </button>
+          </>}
           <button onClick={handleExport}
             style={{ padding: "7px 14px", fontSize: "12px", borderRadius: "8px", background: "white", border: "1px solid #e2e8f0", color: "#374151", fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}>
-            <i className="ti ti-download" style={{ fontSize: "13px" }} aria-hidden="true"></i>Export CSV
+            <i className="ti ti-download" style={{ fontSize: "13px" }} aria-hidden="true"></i>Export Excel
           </button>
           {showExportMsg && <span style={{ fontSize: "12px", color: "#16a34a", fontWeight: 500 }}>✓ Exported</span>}
+          {rosterSaveMsg && <span style={{ fontSize: "12px", color: rosterSaveMsg.startsWith("✓") ? "#16a34a" : "#dc2626", fontWeight: 600 }}>{rosterSaveMsg}</span>}
         </div>
       </div>
 
@@ -1654,6 +2340,28 @@ export default function App() {
             extraOptions={[["Shift", "shift", uniqueShifts, shiftColorMap]]}
           />
 
+          {/* Single-date view: narrow the whole roster grid down to just one date */}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "10px", padding: "8px 14px" }}>
+            <i className="ti ti-calendar-event" style={{ fontSize: "13px", color: "#64748b" }} aria-hidden="true"></i>
+            <span style={{ fontSize: "12px", color: "#64748b", fontWeight: 500 }}>View date:</span>
+            <input type="date" value={singleDate}
+              min={`${year}-${padM}-01`}
+              max={`${year}-${padM}-${String(daysInMonthCount).padStart(2,"0")}`}
+              onChange={e => setSingleDate(e.target.value)}
+              style={{ padding: "5px 10px", border: "1px solid #d1d5db", borderRadius: "6px", fontSize: "12px", color: "#374151" }} />
+            {singleDateDay && (
+              <>
+                <span style={{ fontSize: "12px", color: "#1d4ed8", fontWeight: 600 }}>
+                  Showing {monthName} {singleDateDay} only
+                </span>
+                <button onClick={() => setSingleDate("")}
+                  style={{ fontSize: "11px", padding: "4px 10px", borderRadius: "6px", color: "#dc2626", background: "#fef2f2", border: "1px solid #fca5a5", cursor: "pointer", fontWeight: 500 }}>
+                  ✕ Show full month
+                </button>
+              </>
+            )}
+          </div>
+
           {/* Shift legend */}
           <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "12px", alignItems: "center" }}>
             {SHIFTS_LIST.map(s => {
@@ -1683,7 +2391,7 @@ export default function App() {
                 <col style={{ width: "82px" }} />
                 <col style={{ width: "90px" }} />
                 <col style={{ width: "130px" }} />
-                {days.map(d => <col key={d.date} style={{ width: "32px" }} />)}
+                {visibleDays.map(d => <col key={d.date} style={{ width: "32px" }} />)}
                 <col style={{ width: "50px" }} />
                 <col style={{ width: "42px" }} />
               </colgroup>
@@ -1693,7 +2401,7 @@ export default function App() {
                     <th key={h} style={{ ...TH_BASE, position: "sticky", top: 0, left: left, zIndex: 25, boxShadow: h === "City" ? "2px 0 6px rgba(0,0,0,0.08)" : "none" }}>{h}</th>
                   ))}
                   <th style={{ ...TH_BASE, position: "sticky", top: 0, zIndex: 15 }}>Contact</th>
-                  {days.map(d => (
+                  {visibleDays.map(d => (
                     <th key={d.date} style={{
                       ...TH_BASE, textAlign: "center", padding: "5px 2px",
                       position: "sticky", top: 0, zIndex: 15,
@@ -1743,7 +2451,7 @@ export default function App() {
                           </span>
                         ) : <span style={{ color: "#cbd5e1" }}>—</span>}
                       </td>
-                      {days.map(d => {
+                      {visibleDays.map(d => {
                         const shift = roster[member.id]?.[d.date] || "OFF";
                         const col = SHIFT_COLORS[shift] || SHIFT_COLORS.OFF;
                         const isSel = selectedCell?.memberId === member.id && selectedCell?.date === d.date;
@@ -1760,13 +2468,13 @@ export default function App() {
                           </td>
                         );
                       })}
-                      <td style={{ textAlign: "center", padding: "7px 4px", fontWeight: 700, fontSize: "12px", color: st.workDays < conditions.minDaysPerMonth ? "#dc2626" : "#166534", borderBottom: "1px solid #e2e8f0", borderRight: "1px solid #e2e8f0" }}>{st.workDays}</td>
+                      <td style={{ textAlign: "center", padding: "7px 4px", fontWeight: 700, fontSize: "12px", color: st.workDays === targetWorkDays ? "#166534" : "#dc2626", borderBottom: "1px solid #e2e8f0", borderRight: "1px solid #e2e8f0" }}>{st.workDays}</td>
                       <td style={{ textAlign: "center", padding: "7px 4px", color: "#6b7280", fontSize: "12px", borderBottom: "1px solid #e2e8f0" }}>{st.offDays}</td>
                     </tr>
                   );
                 })}
                 {filteredRoster.length === 0 && (
-                  <tr><td colSpan={days.length + 8} style={{ padding: "2.5rem", textAlign: "center", color: "#94a3b8", fontSize: "13px" }}>No resources match the current filters</td></tr>
+                  <tr><td colSpan={visibleDays.length + 8} style={{ padding: "2.5rem", textAlign: "center", color: "#94a3b8", fontSize: "13px" }}>No resources match the current filters</td></tr>
                 )}
               </tbody>
             </table>
@@ -1845,6 +2553,7 @@ export default function App() {
                     <span style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "4px", fontWeight: 600, background: (TECH_COLORS[m.tech]||"#666")+"18", color: TECH_COLORS[m.tech]||"#666" }}>{m.tech}</span>
                     <span style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "5px", fontWeight: 600, background: m.location==="Onsite"?"#dcfce7":"#dbeafe", color: m.location==="Onsite"?"#166534":"#1e40af" }}>{m.location}</span>
                     {m.city && <span style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "4px", background: "#f1f5f9", color: "#475569", display: "flex", alignItems: "center", gap: "3px" }}><i className="ti ti-map-pin" style={{ fontSize: "10px" }} aria-hidden="true"></i>{m.city}</span>}
+                    {m.designation && <span style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "4px", background: "#eef2ff", color: "#4338ca", fontWeight: 700 }}>Designation: {m.designation}</span>}
                     {m.isLead    && <span style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "4px", background: "#fef3c7", color: "#92400e", fontWeight: 600 }}>Lead</span>}
                     {m.isSenior  && <span style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "4px", background: "#ede9fe", color: "#4c1d95", fontWeight: 600 }}>Senior</span>}
                     {m.isManager && <span style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "4px", background: "#fee2e2", color: "#991b1b", fontWeight: 600 }}>Manager</span>}
@@ -1857,7 +2566,7 @@ export default function App() {
                   )}
                   <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: "8px", display: "flex", justifyContent: "space-between", fontSize: "12px" }}>
                     <span style={{ color: "#64748b" }}>Work days</span>
-                    <span style={{ fontWeight: 700, color: st.workDays < conditions.minDaysPerMonth ? "#dc2626" : "#166534" }}>{st.workDays} / {days.length}</span>
+                    <span style={{ fontWeight: 700, color: st.workDays === targetWorkDays ? "#166534" : "#dc2626" }}>{st.workDays} / {days.length}</span>
                   </div>
                   {st.we > 0 && (
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", marginTop: "5px" }}>
@@ -1885,7 +2594,7 @@ export default function App() {
       {tab === "weeklyoff" && (
         <div>
           <p style={{ fontSize: "13px", color: "#64748b", marginBottom: "14px" }}>
-            Weekly off schedule for all {teamMembers.length} resources in {monthName} {year}. Leads & Managers get Sat+Sun off every week. Team members get Sat+Sun off with alternate weekend coverage shifts.
+            Weekly off schedule for all {teamMembers.length} resources in {monthName} {year}. Leads & Managers get Sat+Sun off every week. Team members may have Fri/Sat, Sat/Sun, or Sun/Mon week-offs based on roster balancing and weekend coverage.
           </p>
 
           {/* Summary legend */}
@@ -2073,8 +2782,9 @@ export default function App() {
                       Saturday + Sunday off every week.<br/>
                       On <strong>alternate weekends</strong> one day is a coverage shift:<br/>
                       — Both WS1 and WS2 run on every Saturday and Sunday<br/>
-                      — 3 people on WS1 + 3 on WS2 per weekend day<br/>
-                      No consecutive weekend shifts. Exactly 8 off days per month.
+                      — Minimum 2 people on WS1 + minimum 2 on WS2 per weekend day; maximum 4 per shift is allowed<br/>
+                      — Every weekend shift must include at least one A/PA and one PAT; no all-PAT weekend shift<br/>
+                      No consecutive weekend shifts across month boundaries. Monthly working days must be equal for all resources.
                     </p>
                   </div>
                 </>
@@ -2089,7 +2799,7 @@ export default function App() {
             ))}
           </div>
           <div style={{ marginTop: "16px", display: "flex", gap: "10px" }}>
-            <button onClick={() => { setGenerating(true); setTimeout(() => { setManualOverrides({}); setGenerating(false); setTab("roster"); }, 900); }}
+            <button onClick={() => { setGenerating(true); setTimeout(() => { setSavedRosterMonth(null); setManualOverrides({}); setGenerating(false); setTab("roster"); }, 900); }}
               style={{ background: "#1d4ed8", color: "white", border: "none", padding: "9px 22px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}>
               <i className="ti ti-sparkles" style={{ fontSize: "13px" }} aria-hidden="true"></i>Apply & generate roster
             </button>
@@ -2110,7 +2820,7 @@ export default function App() {
       {tab === "audit" && (
         <div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px,1fr))", gap: "10px", marginBottom: "16px" }}>
-            {[["Avg days",avgWorkDays,"ti-calendar","#1d4ed8","#eff6ff"],["Min days",minDays,"ti-arrow-down","#dc2626","#fef2f2"],["Max days",maxDays,"ti-arrow-up","#166534","#f0fdf4"],["Fairness",`${fairness}%`,"ti-star","#d97706","#fffbeb"],["Members",teamMembers.length,"ti-users","#7c3aed","#f5f3ff"],["Min met",`${Object.values(stats).filter(s=>s.workDays>=conditions.minDaysPerMonth).length}/${teamMembers.length}`,"ti-check","#0891b2","#ecfeff"]].map(([lbl,val,icon,col,bg]) => (
+            {[["Avg days",avgWorkDays,"ti-calendar","#1d4ed8","#eff6ff"],["Min days",minDays,"ti-arrow-down","#dc2626","#fef2f2"],["Max days",maxDays,"ti-arrow-up","#166534","#f0fdf4"],["Fairness",`${fairness}%`,"ti-star","#d97706","#fffbeb"],["Members",teamMembers.length,"ti-users","#7c3aed","#f5f3ff"],["Exact days",`${Object.values(stats).filter(s=>s.workDays===targetWorkDays).length}/${teamMembers.length}`,"ti-check","#0891b2","#ecfeff"]].map(([lbl,val,icon,col,bg]) => (
               <div key={lbl} style={{ background: bg, border: `1px solid ${col}30`, borderRadius: "8px", padding: "10px 12px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "5px", marginBottom: "5px" }}>
                   <i className={`ti ${icon}`} style={{ fontSize: "13px", color: col }} aria-hidden="true"></i>
@@ -2132,7 +2842,7 @@ export default function App() {
             <table style={{ borderCollapse: "collapse", fontSize: "12px", width: "100%" }}>
               <thead>
                 <tr>
-                  {["#","Resource","Tech","Role","Location","S1","S2","GEN","WE","Night","Total","Off","Status"].map((h,i) => (
+                  {["#","Resource","Tech","Role","Location","S1","S2","GEN","WE","Total","Off","Status"].map((h,i) => (
                     <th key={h} style={{ ...TH_BASE, textAlign: i >= 5 ? "center" : "left", width: i === 0 ? "36px" : i >= 5 ? "48px" : undefined }}>{h}</th>
                   ))}
                 </tr>
@@ -2140,7 +2850,7 @@ export default function App() {
               <tbody>
                 {filteredAudit.map((m, i) => {
                   const st = stats[m.id];
-                  const ok = st.workDays >= conditions.minDaysPerMonth;
+                  const ok = st.workDays === targetWorkDays;
                   return (
                     <tr key={m.id} style={{ background: i % 2 === 0 ? "white" : "#f8fafc" }}
                       onMouseEnter={e => e.currentTarget.style.background="#eff6ff"}
@@ -2154,7 +2864,7 @@ export default function App() {
                       <td style={{ ...TD, padding: "7px 10px" }}>
                         <span style={{ fontSize: "10px", padding: "2px 7px", borderRadius: "4px", fontWeight: 600, background: m.location==="Onsite"?"#dcfce7":"#dbeafe", color: m.location==="Onsite"?"#166534":"#1e40af" }}>{m.location}</span>
                       </td>
-                      {[st.s1, st.s2, st.workDays-st.s1-st.s2-st.we, st.we, st.night].map((v, vi) => (
+                      {[st.s1, st.s2, st.workDays-st.s1-st.s2-st.we, st.we].map((v, vi) => (
                         <td key={vi} style={{ ...TD, textAlign: "center", padding: "7px 6px", color: v===0?"#cbd5e1":"#374151", fontWeight: v>0?500:400 }}>{v||"—"}</td>
                       ))}
                       <td style={{ ...TD, textAlign: "center", padding: "7px 6px", fontWeight: 700, color: ok?"#166534":"#dc2626" }}>{st.workDays}</td>
@@ -2168,14 +2878,13 @@ export default function App() {
                   );
                 })}
                 {filteredAudit.length === 0 && (
-                  <tr><td colSpan={13} style={{ padding: "2.5rem", textAlign: "center", color: "#94a3b8", fontSize: "13px" }}>No resources match the current filters</td></tr>
+                  <tr><td colSpan={12} style={{ padding: "2.5rem", textAlign: "center", color: "#94a3b8", fontSize: "13px" }}>No resources match the current filters</td></tr>
                 )}
                 <tr style={{ background: "#f1f5f9", fontWeight: 700, borderTop: "2px solid #94a3b8" }}>
                   <td colSpan={5} style={{ padding: "8px 12px", fontSize: "12px", textAlign: "right", color: "#475569" }}>Totals ({filteredAudit.length} shown)</td>
                   {["s1","s2"].map(k => <td key={k} style={{ textAlign:"center", padding:"8px 6px", fontSize:"12px" }}>{filteredAudit.reduce((a,m)=>a+stats[m.id][k],0)}</td>)}
                   <td style={{ textAlign:"center", padding:"8px 6px", fontSize:"12px" }}>{filteredAudit.reduce((a,m)=>a+(stats[m.id].workDays-stats[m.id].s1-stats[m.id].s2-stats[m.id].we),0)}</td>
                   <td style={{ textAlign:"center", padding:"8px 6px", fontSize:"12px" }}>{filteredAudit.reduce((a,m)=>a+stats[m.id].we,0)}</td>
-                  <td style={{ textAlign:"center", padding:"8px 6px", fontSize:"12px" }}>{filteredAudit.reduce((a,m)=>a+stats[m.id].night,0)}</td>
                   <td style={{ textAlign:"center", padding:"8px 6px", fontSize:"12px" }}>{filteredAudit.reduce((a,m)=>a+stats[m.id].workDays,0)}</td>
                   <td colSpan={2}></td>
                 </tr>
